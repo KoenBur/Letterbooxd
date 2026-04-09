@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Letterbooxd — Track what you've read</title>
+  <meta name="description" content="Letterbooxd — Social book tracking. Rate and review books, keep track of what you've read.">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='28'>📚</text></svg>">
+</head>
+<body>
+
+<!-- ─── HEADER ─────────────────────────────────────────────────────────── -->
+<header>
+  <div class="header-inner">
+    <a href="#" class="logo" id="logo-link">Letter<span>booxd</span></a>
+    <nav>
+      <a href="#" data-page="home" class="active">Films</a>
+      <a href="#" data-page="search">Search</a>
+      <a href="#" data-page="profile">Members</a>
+    </nav>
+    <div class="header-search">
+      <input type="text" id="header-search" placeholder="Search books…" autocomplete="off">
+    </div>
+    <a href="#" class="profile-link" id="profile-nav-link">
+      <div class="profile-avatar" id="profile-avatar-small">R</div>
+    </a>
+  </div>
+</header>
+
+<!-- ─── HOME PAGE ─────────────────────────────────────────────────────── -->
+<div class="page active" id="page-home">
+
+  <div class="hero">
+    <div class="hero-inner">
+      <h1>Track books you've<br><em>read</em>. Tell your friends<br>what's good.</h1>
+      <p>Keep a diary of everything you've read, rate books and build a profile showcasing your four favourite reads.</p>
+      <div class="hero-actions">
+        <button class="btn btn-primary" id="hero-search-btn">Get started — it's free</button>
+        <button class="btn btn-secondary" id="hero-profile-btn">Go to profile</button>
+      </div>
+    </div>
+  </div>
+
+  <main>
+    <section style="margin-bottom:48px">
+      <div class="section-header">
+        <h2>Popular Books</h2>
+        <a href="#" onclick="navigate('search', {query:'bestseller'}); return false">More →</a>
+      </div>
+      <div class="books-grid" id="popular-books-grid"></div>
+    </section>
+
+    <section style="margin-bottom:48px">
+      <div class="section-header">
+        <h2>Classic Literature</h2>
+        <a href="#" onclick="navigate('search', {query:'classic literature'}); return false">More →</a>
+      </div>
+      <div class="books-grid" id="classics-books-grid"></div>
+    </section>
+
+    <section style="margin-bottom:48px">
+      <div class="section-header">
+        <h2>Science Fiction</h2>
+        <a href="#" onclick="navigate('search', {query:'science fiction'}); return false">More →</a>
+      </div>
+      <div class="books-grid" id="fiction-books-grid"></div>
+    </section>
+  </main>
+
+</div>
+
+<!-- ─── SEARCH PAGE ────────────────────────────────────────────────────── -->
+<div class="page" id="page-search">
+
+  <div class="search-hero">
+    <div class="search-hero-inner">
+      <h2>Find a book</h2>
+      <div class="search-bar">
+        <input type="text" id="main-search-input" placeholder="Title, author, ISBN…" autocomplete="off">
+        <button id="search-btn">Search</button>
+      </div>
+      <div class="search-filters">
+        <span style="font-size:12px;color:var(--text-muted);line-height:28px;margin-right:4px">Browse:</span>
+        <div class="filter-chip" data-genre="fantasy">Fantasy</div>
+        <div class="filter-chip" data-genre="mystery thriller">Thriller</div>
+        <div class="filter-chip" data-genre="romance">Romance</div>
+        <div class="filter-chip" data-genre="biography">Biography</div>
+        <div class="filter-chip" data-genre="history">History</div>
+        <div class="filter-chip" data-genre="philosophy">Philosophy</div>
+        <div class="filter-chip" data-genre="self help">Self-Help</div>
+        <div class="filter-chip" data-genre="horror">Horror</div>
+        <div class="filter-chip" data-genre="graphic novel">Comics</div>
+      </div>
+    </div>
+  </div>
+
+  <main>
+    <div id="search-results-info" class="search-results-info"></div>
+    <div class="books-grid large" id="search-results-grid"></div>
+  </main>
+
+</div>
+
+<!-- ─── BOOK DETAIL PAGE ───────────────────────────────────────────────── -->
+<div class="page" id="page-book">
+  <div id="book-detail-content"></div>
+</div>
+
+<!-- ─── PROFILE PAGE ──────────────────────────────────────────────────── -->
+<div class="page" id="page-profile">
+
+  <div class="profile-header-section">
+    <div class="profile-header-inner">
+      <div class="profile-big-avatar" id="profile-avatar-letter">R</div>
+      <div>
+        <div class="profile-name" id="profile-username">Reader</div>
+        <div style="color:var(--text-muted);font-size:13px">Member · Letterbooxd</div>
+        <div class="profile-stats">
+          <div class="stat-item">
+            <span class="stat-num" id="stat-read">0</span>
+            <span class="stat-label">Books</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-num" id="stat-rated">0</span>
+            <span class="stat-label">Rated</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-num" id="stat-favs">0</span>
+            <span class="stat-label">Favs</span>
+          </div>
+        </div>
+      </div>
+      <div style="margin-left:auto;display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+        <button class="btn btn-secondary btn-sm" id="edit-username-btn">Edit profile</button>
+        <div class="edit-profile-form" id="edit-name-form" style="display:none">
+          <input type="text" id="username-input" placeholder="Your name" maxlength="30">
+          <button class="btn btn-primary btn-sm" id="save-username-btn">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <main>
+    <section class="favorites-section">
+      <h3>
+        <svg width="16" height="16" fill="var(--accent-orange)" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+        Four Favourite Books
+      </h3>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Select up to four all-time favourites to show on your profile.</p>
+      <div class="favorites-grid" id="favorites-grid"></div>
+    </section>
+
+    <section>
+      <div class="section-header">
+        <h2>Read</h2>
+      </div>
+      <div id="read-books-list"></div>
+    </section>
+  </main>
+
+</div>
+
+<!-- ─── RATING MODAL ───────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="rating-modal">
+  <div class="modal">
+    <h3 id="modal-book-title">Rate this book</h3>
+    <div class="modal-stars">
+      <span class="modal-star" data-val="1">★</span>
+      <span class="modal-star" data-val="2">★</span>
+      <span class="modal-star" data-val="3">★</span>
+      <span class="modal-star" data-val="4">★</span>
+      <span class="modal-star" data-val="5">★</span>
+    </div>
+    <div style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Click a star to rate, click again to remove.</div>
+    <div class="modal-actions">
+      <button class="modal-cancel" id="modal-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── TOAST CONTAINER ────────────────────────────────────────────────── -->
+<div class="toast-container" id="toast-container"></div>
+
+<script src="js/app.js"></script>
+</body>
+</html>
