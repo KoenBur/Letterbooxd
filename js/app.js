@@ -13,7 +13,7 @@ try {
   }
 } catch (e) {
   console.warn('Supabase init failed:', e);
-}
+} //AS
 
 // ─── STATE ──────────────────────────────────────────────────────────────
 const state = {
