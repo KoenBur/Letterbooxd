@@ -1,7 +1,20 @@
 // ─── SUPABASE ───────────────────────────────────────────────────────────
 const SUPABASE_URL = 'https://ycejifwmvlpjewbsbrub.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljZWppZndtdmxwamV3YnNicnViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MjU4MDksImV4cCI6MjA5MTQwMTgwOX0.wCbsCkjSoSgEBniitnMVmhdiCnTxg94xnzD6K6VUUOA';
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// The UMD build may expose createClient at different paths
+let supabase = null;
+try {
+  const sb = window.supabase;
+  const createFn = sb?.createClient || sb?.default?.createClient;
+  if (createFn) {
+    supabase = createFn(SUPABASE_URL, SUPABASE_ANON_KEY);
+  } else {
+    console.warn('Supabase library not found — running in offline mode');
+  }
+} catch (e) {
+  console.warn('Supabase init failed:', e, '— running in offline mode');
+}
 
 // ─── STATE ──────────────────────────────────────────────────────────────
 const state = {
@@ -23,10 +36,26 @@ const state = {
 
 // ─── AUTH ────────────────────────────────────────────────────────────────
 async function initAuth() {
+  if (!supabase) {
+    // Offline mode — load from localStorage
+    state.username = localStorage.getItem('lbx_username') || 'Reader';
+    state.readBooks = JSON.parse(localStorage.getItem('lbx_read') || '{}');
+    state.ratings = JSON.parse(localStorage.getItem('lbx_ratings') || '{}');
+    state.favorites = JSON.parse(localStorage.getItem('lbx_favorites') || '[]');
+    updateAuthUI();
+    return;
+  }
+
   const { data: { session } } = await supabase.auth.getSession();
   if (session?.user) {
     state.user = session.user;
     await loadUserData();
+  } else {
+    // Not logged in — load from localStorage as fallback
+    state.username = localStorage.getItem('lbx_username') || 'Reader';
+    state.readBooks = JSON.parse(localStorage.getItem('lbx_read') || '{}');
+    state.ratings = JSON.parse(localStorage.getItem('lbx_ratings') || '{}');
+    state.favorites = JSON.parse(localStorage.getItem('lbx_favorites') || '[]');
   }
   updateAuthUI();
 
@@ -51,23 +80,34 @@ async function initAuth() {
 
 function updateAuthUI() {
   const loggedIn = !!state.user;
+  const hasSupabase = !!supabase;
   const loginBtn = document.getElementById('header-login-btn');
   const signupBtn = document.getElementById('header-signup-btn');
   const profileLink = document.getElementById('profile-nav-link');
   const logoutBtn = document.getElementById('header-logout-btn');
   const heroProfileBtn = document.getElementById('hero-profile-btn');
 
-  if (loginBtn) loginBtn.style.display = loggedIn ? 'none' : '';
-  if (signupBtn) signupBtn.style.display = loggedIn ? 'none' : '';
-  if (profileLink) profileLink.style.display = loggedIn ? '' : 'none';
-  if (logoutBtn) logoutBtn.style.display = loggedIn ? '' : 'none';
-  if (heroProfileBtn) heroProfileBtn.style.display = loggedIn ? '' : 'none';
+  if (!hasSupabase) {
+    // Offline mode — hide auth buttons, show profile link
+    if (loginBtn) loginBtn.style.display = 'none';
+    if (signupBtn) signupBtn.style.display = 'none';
+    if (profileLink) profileLink.style.display = '';
+    if (logoutBtn) logoutBtn.style.display = 'none';
+    if (heroProfileBtn) heroProfileBtn.style.display = '';
+  } else {
+    if (loginBtn) loginBtn.style.display = loggedIn ? 'none' : '';
+    if (signupBtn) signupBtn.style.display = loggedIn ? 'none' : '';
+    if (profileLink) profileLink.style.display = loggedIn ? '' : 'none';
+    if (logoutBtn) logoutBtn.style.display = loggedIn ? '' : 'none';
+    if (heroProfileBtn) heroProfileBtn.style.display = loggedIn ? '' : 'none';
+  }
 
   const avatarSmall = document.getElementById('profile-avatar-small');
   if (avatarSmall) avatarSmall.textContent = state.username[0]?.toUpperCase() || 'R';
 }
 
 async function signUp(email, password, username) {
+  if (!supabase) throw new Error('Auth is not available. Please try again later.');
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
@@ -85,13 +125,14 @@ async function signUp(email, password, username) {
 }
 
 async function logIn(email, password) {
+  if (!supabase) throw new Error('Auth is not available. Please try again later.');
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) throw error;
   return data;
 }
 
 async function logOut() {
-  await supabase.auth.signOut();
+  if (supabase) await supabase.auth.signOut();
   state.user = null;
   state.readBooks = {};
   state.ratings = {};
@@ -194,6 +235,8 @@ async function save() {
 }
 
 function requireAuth(actionName) {
+  // If supabase isn't available, allow localStorage-based usage
+  if (!supabase) return true;
   if (state.user) return true;
   showToast(`Log in to ${actionName}`, 'info');
   openAuthModal('login');
@@ -1684,7 +1727,7 @@ function bookCardHTML(book) {
 
 // ─── PROFILE ──────────────────────────────────────────────────────────────
 function loadProfilePage() {
-  if (!state.user) {
+  if (supabase && !state.user) {
     openAuthModal('login');
     navigate('home');
     return;
