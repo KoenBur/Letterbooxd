@@ -1227,10 +1227,63 @@ async function searchBooks(query, limit = 20) {
   return ranked.slice(0, limit).map(normalizeGoogleBook);
 }
 
+// ─── COVER CACHE ─────────────────────────────────────────────────────────
+// In-memory cache to avoid even hitting Supabase repeatedly in one session
+const coverMemCache = {};
+
+async function getCachedCover(title, author) {
+  const key = (title + '||' + author).toLowerCase();
+  // 1. Check in-memory cache
+  if (coverMemCache[key]) return coverMemCache[key];
+  // 2. Check Supabase cache
+  if (!sb) return null;
+  try {
+    const { data } = await sb
+      .from('book_cover_cache')
+      .select('cover_url, book_key, year')
+      .eq('title_lower', title.toLowerCase())
+      .eq('author_lower', author.toLowerCase())
+      .maybeSingle();
+    if (data?.cover_url) {
+      const result = { key: data.book_key || title, title, author, coverUrl: data.cover_url, year: data.year || '' };
+      coverMemCache[key] = result;
+      return result;
+    }
+  } catch (e) { /* ignore cache miss */ }
+  return null;
+}
+
+async function saveCoverToCache(title, author, coverUrl, bookKey, year) {
+  const key = (title + '||' + author).toLowerCase();
+  const result = { key: bookKey || title, title, author, coverUrl, year: year || '' };
+  coverMemCache[key] = result;
+  if (!sb || !coverUrl) return;
+  try {
+    await sb.from('book_cover_cache').upsert({
+      title_lower: title.toLowerCase(),
+      author_lower: author.toLowerCase(),
+      cover_url: coverUrl,
+      book_key: bookKey || title,
+      year: year || '',
+    }, { onConflict: 'title_lower,author_lower' });
+  } catch (e) { /* ignore cache write failure */ }
+}
+
 async function searchBooksForList(title, author) {
+  // Check cache first
+  const cached = await getCachedCover(title, author);
+  if (cached) return cached;
+
+  // Fetch from Google Books
   const q = `intitle:"${title}" inauthor:"${author}" -journal -proceedings -textbook -handbook`;
   const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=10&printType=books&langRestrict=en&orderBy=relevance`;
   const res = await fetch(url);
+
+  // If rate limited, return a placeholder instead of failing
+  if (res.status === 429) {
+    return { key: title, title, author, coverUrl: null, year: '' };
+  }
+
   const data = await res.json();
 
   const ranked = filterAndRankGoogleBooks(data.items || [], {
@@ -1258,8 +1311,10 @@ async function searchBooksForList(title, author) {
     book.coverUrl = await getWikipediaCover(title, author);
   }
 
-  if (!book.coverUrl) {
-    book.coverUrl = `https://covers.openlibrary.org/b/title/${encodeURIComponent(title)}-L.jpg?default=false`;
+  // Don't fall back to openlibrary title URL — it almost never works and generates 404s
+  // Save to cache for future loads
+  if (book.coverUrl) {
+    saveCoverToCache(title, author, book.coverUrl, book.key, book.year);
   }
 
   return book;
