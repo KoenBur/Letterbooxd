@@ -686,12 +686,20 @@ async function searchBooks(query, limit = 20) {
 
 async function searchBooksForList(title, author) {
   const q = `intitle:${title} inauthor:${author}`;
-  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=1&printType=books`;
+  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=3&printType=books`;
   const res = await fetch(url);
   const data = await res.json();
-  const book = data.items?.[0] ? normalizeGoogleBook(data.items[0]) : { key: title, title, author, coverUrl: null, year: '', pages: null, description: '' };
+  let book = null;
+  if (data.items?.length) {
+    const withCover = data.items.find(i => i.volumeInfo?.imageLinks);
+    book = normalizeGoogleBook(withCover || data.items[0]);
+  }
+  if (!book) book = { key: title, title, author, coverUrl: null, year: '', pages: null, description: '' };
   if (!book.coverUrl) {
     book.coverUrl = await getWikipediaCover(title, author);
+  }
+  if (!book.coverUrl) {
+    book.coverUrl = `https://covers.openlibrary.org/b/title/${encodeURIComponent(title)}-M.jpg?default=false`;
   }
   return book;
 }
@@ -714,18 +722,33 @@ async function getPopularBooks(subject, limit = 16) {
 }
 
 // Fetch a curated shelf — tries Google Books first, falls back to Wikipedia for cover
+// Always returns ALL books (even without covers) so shelves stay full
 async function getCuratedShelf(titles) {
   const results = await Promise.allSettled(
     titles.map(async ({ title, author }) => {
-      const q = `intitle:${title} inauthor:${author}`;
-      const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=1&printType=books`);
-      const data = await res.json();
-      const book = data.items?.[0] ? normalizeGoogleBook(data.items[0]) : { key: title, title, author, coverUrl: null, year: '', pages: null, description: '' };
-      // If no cover from Google, try Wikipedia
-      if (!book.coverUrl) {
-        book.coverUrl = await getWikipediaCover(title, author);
+      try {
+        const q = `intitle:${title} inauthor:${author}`;
+        const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=3&printType=books`);
+        const data = await res.json();
+        // Try to pick the result with a cover, falling back to first
+        let book = null;
+        if (data.items?.length) {
+          const withCover = data.items.find(i => i.volumeInfo?.imageLinks);
+          book = normalizeGoogleBook(withCover || data.items[0]);
+        }
+        if (!book) book = { key: title, title, author, coverUrl: null, year: '', pages: null, description: '' };
+        // If no cover from Google, try Wikipedia
+        if (!book.coverUrl) {
+          book.coverUrl = await getWikipediaCover(title, author);
+        }
+        // If still no cover, try Open Library covers API
+        if (!book.coverUrl) {
+          book.coverUrl = `https://covers.openlibrary.org/b/title/${encodeURIComponent(title)}-M.jpg?default=false`;
+        }
+        return book;
+      } catch {
+        return { key: title, title, author, coverUrl: null, year: '', pages: null, description: '' };
       }
-      return book.coverUrl ? book : null;
     })
   );
   return results
@@ -1018,11 +1041,6 @@ async function loadListsPreviews() {
 
     // fetch covers for first 5
     const first5 = list.books.slice(0, 5);
-    for (let i = 0; i < first5.item; i++) {
-      const b = first5[i];
-    }
-
-    // search first 5 books in parallel
     const results = await Promise.allSettled(
       first5.map(b => searchBooksForList(b.title, b.author))
     );
@@ -1070,29 +1088,26 @@ async function loadListDetail(listId) {
       </div>
     </div>
     <div style="max-width:1200px;margin:0 auto;padding:32px 20px 60px">
-      <div id="list-detail-books" class="list-detail-grid">
-        ${list.books.map((b, i) => `
-          <div class="list-grid-card list-book-row" data-idx="${i}" data-title="${escHtml(b.title)}" data-author="${escHtml(b.author)}">
-            <div class="list-grid-cover-wrap">
-              <div class="list-grid-cover-placeholder" id="list-cover-${i}">
-                <div class="list-grid-num">${i+1}</div>
+      <div id="list-detail-books" class="list-tile-grid">
+        ${list.books.map((b, i) => {
+          const isRead = Object.values(state.readBooks).some(rb => rb.title.toLowerCase() === b.title.toLowerCase());
+          return `
+          <div class="list-tile" data-idx="${i}" data-title="${escHtml(b.title)}" data-author="${escHtml(b.author)}">
+            <div class="list-tile-cover" id="list-cover-${i}">
+              <div class="list-tile-placeholder">
+                <span class="list-tile-num">${i+1}</span>
               </div>
-              <div class="list-grid-overlay">
-                <div class="overlay-actions">
-                  <button class="overlay-btn list-mark-read" data-idx="${i}" title="Mark as read">📖</button>
-                </div>
-              </div>
-              ${Object.values(state.readBooks).some(rb => rb.title.toLowerCase() === b.title.toLowerCase())
-                ? '<div class="read-badge" id="list-read-badge-' + i + '">✓</div>'
-                : '<div id="list-read-badge-' + i + '"></div>'}
             </div>
-            <div class="list-grid-info">
-              <div class="list-grid-num-label">${i+1}</div>
-              <div class="list-grid-title">${escHtml(b.title)}</div>
-              <div class="list-grid-author">${escHtml(b.author)}</div>
+            <div class="list-tile-overlay">
+              <button class="overlay-btn list-mark-read ${isRead ? 'read' : ''}" data-idx="${i}" title="Mark as read">${isRead ? '✓' : '📖'}</button>
             </div>
-          </div>
-        `).join('')}
+            ${isRead ? '<div class="read-badge" id="list-read-badge-' + i + '">✓</div>' : '<div id="list-read-badge-' + i + '"></div>'}
+            <div class="list-tile-info">
+              <div class="list-tile-title" title="${escHtml(b.title)}">${escHtml(b.title)}</div>
+              <div class="list-tile-author">${escHtml(b.author)}</div>
+            </div>
+          </div>`;
+        }).join('')}
       </div>
     </div>
   `;
@@ -1113,17 +1128,19 @@ async function loadListCovers(books) {
       if (!el) return;
       if (r.status === 'fulfilled' && r.value) {
         const book = r.value;
-        // Store fetched book on the card for click handler
-        const card = el.closest('.list-book-row');
-        if (card) {
-          card._book = book;
-          card.onclick = (e) => { if (!e.target.closest('.overlay-btn')) openBook(book); };
+        // Store fetched book on the tile for click handler
+        const tile = el.closest('.list-tile');
+        if (tile) {
+          tile._book = book;
+          tile.addEventListener('click', (e) => { if (!e.target.closest('.overlay-btn')) openBook(book); });
+          tile.style.cursor = 'pointer';
         }
         if (book.coverUrl) {
-          el.outerHTML = `<img id="list-cover-${idx}" src="${book.coverUrl}" alt="${escHtml(book.title)}" class="list-grid-cover-img" onerror="this.style.display='none'">`;
+          el.innerHTML = `<img src="${book.coverUrl}" alt="${escHtml(book.title)}" class="list-tile-cover-img" onerror="this.style.display='none';this.parentElement.querySelector('.list-tile-placeholder')?.style.display='flex'">
+            <div class="list-tile-placeholder" style="display:none"><span class="list-tile-num">${idx+1}</span></div>`;
         }
         // Bind mark-read button
-        const readBtn = document.querySelector(`.list-mark-read[data-idx="${idx}"]`);
+        const readBtn = tile?.querySelector(`.list-mark-read[data-idx="${idx}"]`);
         if (readBtn) {
           const isRead = Object.values(state.readBooks).some(rb => rb.title.toLowerCase() === book.title.toLowerCase());
           if (isRead) { readBtn.textContent = '✓'; readBtn.classList.add('read'); }
@@ -1168,7 +1185,7 @@ async function loadBookDetail(book) {
         <div class="book-detail-info">
           ${book.year ? `<div class="book-detail-year">${book.year}</div>` : ''}
           <h1 class="book-detail-title">${escHtml(book.title)}</h1>
-          <div class="book-detail-author">by <a href="#">${escHtml(book.author)}</a></div>
+          <div class="book-detail-author">by <a href="#" class="author-link" data-author="${escHtml(book.author)}">${escHtml(book.author)}</a></div>
           <div class="detail-meta">
             ${book.pages ? `<div class="meta-item"><span class="meta-label">Pages</span><span class="meta-value">${book.pages}</span></div>` : ''}
             <div class="meta-item"><span class="meta-label">Status</span><span class="meta-value" id="detail-status">${isRead ? '✓ Read' : '— Not read'}</span></div>
@@ -1192,12 +1209,125 @@ async function loadBookDetail(book) {
       </div>
     </div>
     <div class="detail-tabs-section">
-      <div class="tabs"><button class="tab-btn active">Overview</button></div>
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="overview">Overview</button>
+        <button class="tab-btn" data-tab="details">Details</button>
+        <button class="tab-btn" data-tab="genres">Genres</button>
+      </div>
+      <div class="tab-content" id="tab-overview">
+        <div class="reviews-section">
+          <h3 class="reviews-heading">Reviews</h3>
+          <div class="review-list">
+            <div class="review-item">
+              <div class="review-header">
+                <div class="review-avatar">A</div>
+                <div class="review-meta">
+                  <div class="review-name">Alice M.</div>
+                  <div class="review-stars">${'★'.repeat(5)}</div>
+                </div>
+                <div class="review-date">Mar 2025</div>
+              </div>
+              <p class="review-text">An absolutely wonderful read. The prose is captivating and the story stays with you long after you've finished the last page. Highly recommended for anyone who appreciates great literature.</p>
+            </div>
+            <div class="review-item">
+              <div class="review-header">
+                <div class="review-avatar">J</div>
+                <div class="review-meta">
+                  <div class="review-name">James K.</div>
+                  <div class="review-stars">${'★'.repeat(4)}${'☆'.repeat(1)}</div>
+                </div>
+                <div class="review-date">Feb 2025</div>
+              </div>
+              <p class="review-text">Really enjoyed this one. The characters are well-developed and the pacing kept me engaged throughout. Lost a star because the ending felt a bit rushed, but overall a great experience.</p>
+            </div>
+            <div class="review-item">
+              <div class="review-header">
+                <div class="review-avatar">S</div>
+                <div class="review-meta">
+                  <div class="review-name">Sarah L.</div>
+                  <div class="review-stars">${'★'.repeat(4)}${'☆'.repeat(1)}</div>
+                </div>
+                <div class="review-date">Jan 2025</div>
+              </div>
+              <p class="review-text">A thought-provoking book that challenges your perspective. Some parts were slow but the payoff was worth it. Would love to discuss this in a book club setting.</p>
+            </div>
+          </div>
+          <p style="color:var(--text-muted);font-size:13px;margin-top:16px;font-style:italic">Review functionality coming soon — these are placeholder reviews.</p>
+        </div>
+      </div>
+      <div class="tab-content" id="tab-details" style="display:none">
+        <div class="details-grid" id="book-details-grid">
+          <div class="detail-row"><span class="detail-label">Title</span><span class="detail-value">${escHtml(book.title)}</span></div>
+          <div class="detail-row"><span class="detail-label">Author</span><span class="detail-value"><a href="#" class="author-link" data-author="${escHtml(book.author)}">${escHtml(book.author)}</a></span></div>
+          ${book.year ? `<div class="detail-row"><span class="detail-label">Published</span><span class="detail-value">${book.year}</span></div>` : ''}
+          ${book.pages ? `<div class="detail-row"><span class="detail-label">Pages</span><span class="detail-value">${book.pages}</span></div>` : ''}
+          <div class="detail-row"><span class="detail-label">Google Books ID</span><span class="detail-value" style="font-family:monospace;font-size:12px">${escHtml(book.key)}</span></div>
+        </div>
+      </div>
+      <div class="tab-content" id="tab-genres" style="display:none">
+        <div id="book-genres-content">
+          ${book.categories?.length
+            ? `<div class="genre-tags">${book.categories.map(c => `<span class="genre-tag" data-genre="${escHtml(c)}">${escHtml(c)}</span>`).join('')}</div>`
+            : '<p style="color:var(--text-muted);font-style:italic">No genre information available for this book.</p>'}
+        </div>
+      </div>
+    </div>
+    <div class="detail-tabs-section" id="author-books-section" style="display:none">
+      <h3 class="reviews-heading">More by <span id="author-section-name"></span></h3>
+      <div class="books-grid" id="author-books-grid"></div>
     </div>
   `;
 
   bindDetailActions(book);
+  bindTabs();
+  bindAuthorLinks(book.author);
   fetchAndRenderDescription(book.key);
+}
+
+function bindTabs() {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
+      btn.classList.add('active');
+      const tab = document.getElementById(`tab-${btn.dataset.tab}`);
+      if (tab) tab.style.display = 'block';
+    });
+  });
+
+  // Genre tags are clickable — search for that genre
+  document.querySelectorAll('.genre-tag').forEach(tag => {
+    tag.addEventListener('click', () => {
+      navigate('search', { query: tag.dataset.genre });
+    });
+  });
+}
+
+function bindAuthorLinks(authorName) {
+  document.querySelectorAll('.author-link').forEach(link => {
+    link.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const author = link.dataset.author;
+      // Show author books section
+      const section = document.getElementById('author-books-section');
+      const grid = document.getElementById('author-books-grid');
+      const nameEl = document.getElementById('author-section-name');
+      if (!section || !grid || !nameEl) return;
+
+      nameEl.textContent = author;
+      section.style.display = 'block';
+      grid.innerHTML = Array.from({length: 6}, () => `<div><div class="skeleton skeleton-cover"></div><div class="skeleton skeleton-line"></div></div>`).join('');
+
+      try {
+        const results = await searchBooks(`inauthor:${author}`, 12);
+        renderBookGrid('author-books-grid', results);
+      } catch {
+        grid.innerHTML = '<p style="color:var(--text-muted)">Could not load books by this author.</p>';
+      }
+
+      section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
 }
 
 function bindDetailActions(book) {
@@ -1262,6 +1392,25 @@ async function fetchAndRenderDescription(key) {
 }
 
 // ─── SEARCH ───────────────────────────────────────────────────────────────
+async function doGenreSearch(genre) {
+  document.getElementById('search-results-info').textContent = 'Searching…';
+  renderGridSkeletons('search-results-grid', 12);
+  try {
+    // Use subject: for genre browsing — returns much more relevant results
+    const url = `https://www.googleapis.com/books/v1/volumes?q=subject:${encodeURIComponent(genre)}&maxResults=24&orderBy=relevance&printType=books&langRestrict=en`;
+    const res = await fetch(url);
+    const data = await res.json();
+    const results = (data.items || []).map(normalizeGoogleBook);
+    state.searchResults = results;
+    state.searchQuery = genre;
+    document.getElementById('search-results-info').textContent = `${results.length} results for "${genre}"`;
+    renderBookGrid('search-results-grid', results);
+  } catch (e) {
+    document.getElementById('search-results-info').textContent = 'Search failed. Try again.';
+    showToast('Search failed', 'error');
+  }
+}
+
 async function doSearch(query) {
   if (!query.trim()) return;
   state.searchQuery = query;
@@ -1511,8 +1660,9 @@ document.addEventListener('DOMContentLoaded', () => {
     chip.addEventListener('click', () => {
       document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
       chip.classList.add('active');
-      document.getElementById('main-search-input').value = chip.dataset.genre;
-      doSearch(chip.dataset.genre);
+      const genre = chip.dataset.genre;
+      document.getElementById('main-search-input').value = genre;
+      doGenreSearch(genre);
     });
   });
 
