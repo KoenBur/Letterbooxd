@@ -2,41 +2,17 @@
 const SUPABASE_URL = 'https://ycejifwmvlpjewbsbrub.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljZWppZndtdmxwamV3YnNicnViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MjU4MDksImV4cCI6MjA5MTQwMTgwOX0.wCbsCkjSoSgEBniitnMVmhdiCnTxg94xnzD6K6VUUOA';
 
-// The UMD build exposes window.supabase — find createClient
+// The UMD build sets window.supabase with a createClient function
 let sb = null;
 try {
-  const _g = window.supabase || window.Supabase;
-  // Try every known path the UMD build might use
-  const createFn = _g?.createClient
-    || _g?.default?.createClient
-    || _g?.supabase?.createClient
-    || (typeof _g === 'function' ? _g : null);
-  if (createFn) {
-    sb = typeof createFn === 'function'
-      ? createFn(SUPABASE_URL, SUPABASE_ANON_KEY)
-      : null;
-  }
-  if (!sb) {
-    // Last resort: scan all keys on the global for createClient
-    if (_g && typeof _g === 'object') {
-      for (const key of Object.keys(_g)) {
-        if (typeof _g[key]?.createClient === 'function') {
-          sb = _g[key].createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-          break;
-        }
-        if (key === 'createClient' && typeof _g[key] === 'function') {
-          sb = _g[key](SUPABASE_URL, SUPABASE_ANON_KEY);
-          break;
-        }
-      }
-    }
-  }
-  if (!sb) {
-    console.warn('Supabase library loaded but createClient not found. Keys:', _g ? Object.keys(_g) : 'N/A');
-    console.warn('Running in offline mode.');
+  if (typeof window.supabase !== 'undefined' && window.supabase.createClient) {
+    sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    console.log('Supabase connected');
+  } else {
+    console.warn('Supabase JS not loaded — running in offline mode. window.supabase =', typeof window.supabase);
   }
 } catch (e) {
-  console.warn('Supabase init failed:', e, '— running in offline mode');
+  console.warn('Supabase init failed:', e);
 }
 
 // ─── STATE ──────────────────────────────────────────────────────────────
@@ -1764,7 +1740,7 @@ function loadProfilePage() {
   document.getElementById('profile-username').textContent = state.username;
   document.getElementById('profile-avatar-letter').textContent = state.username[0].toUpperCase();
   const emailEl = document.getElementById('profile-email');
-  if (emailEl) emailEl.textContent = state.user.email || '';
+  if (emailEl) emailEl.textContent = state.user?.email || '';
   renderFavorites();
   renderReadList();
 }
