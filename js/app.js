@@ -710,6 +710,21 @@ async function getPopularBooks(subject, limit = 16) {
   return (data.items || []).map(normalizeGoogleBook);
 }
 
+// Fetch a curated shelf by searching specific known titles — much better cover quality
+async function getCuratedShelf(titles) {
+  const results = await Promise.allSettled(
+    titles.map(({ title, author }) => {
+      const q = `intitle:${title} inauthor:${author}`;
+      return fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=1&printType=books`)
+        .then(r => r.json())
+        .then(d => d.items?.[0] ? normalizeGoogleBook(d.items[0]) : null);
+    })
+  );
+  return results
+    .filter(r => r.status === 'fulfilled' && r.value && r.value.coverUrl)
+    .map(r => r.value);
+}
+
 function normalizeGoogleBook(item) {
   const info = item.volumeInfo || {};
   // Google Books thumbnail — upgrade to zoom=1 for better quality, strip curl=edge
@@ -774,17 +789,75 @@ function navigate(page, params = {}) {
 // ─── HOME PAGE ────────────────────────────────────────────────────────────
 let homeLoaded = false;
 
+// Curated shelves — hand-picked titles with reliable, great-looking covers
+const SHELF_POPULAR = [
+  { title: 'The Hunger Games', author: 'Collins' },
+  { title: 'Gone Girl', author: 'Flynn' },
+  { title: 'The Girl with the Dragon Tattoo', author: 'Larsson' },
+  { title: 'The Da Vinci Code', author: 'Brown' },
+  { title: 'Harry Potter and the Philosophers Stone', author: 'Rowling' },
+  { title: 'The Fault in Our Stars', author: 'Green' },
+  { title: 'Educated', author: 'Westover' },
+  { title: 'Sapiens', author: 'Harari' },
+  { title: 'Atomic Habits', author: 'Clear' },
+  { title: 'The Alchemist', author: 'Coelho' },
+  { title: 'Dune', author: 'Herbert' },
+  { title: 'The Hobbit', author: 'Tolkien' },
+  { title: 'A Little Life', author: 'Yanagihara' },
+  { title: 'Normal People', author: 'Rooney' },
+  { title: 'The Thursday Murder Club', author: 'Osman' },
+  { title: 'Tomorrow and Tomorrow and Tomorrow', author: 'Zevin' },
+];
+
+const SHELF_CLASSICS = [
+  { title: 'To Kill a Mockingbird', author: 'Lee' },
+  { title: '1984', author: 'Orwell' },
+  { title: 'The Great Gatsby', author: 'Fitzgerald' },
+  { title: 'One Hundred Years of Solitude', author: 'Marquez' },
+  { title: 'Crime and Punishment', author: 'Dostoevsky' },
+  { title: 'Brave New World', author: 'Huxley' },
+  { title: 'Anna Karenina', author: 'Tolstoy' },
+  { title: 'Moby Dick', author: 'Melville' },
+  { title: 'The Catcher in the Rye', author: 'Salinger' },
+  { title: 'Middlemarch', author: 'Eliot' },
+  { title: 'Pride and Prejudice', author: 'Austen' },
+  { title: 'Jane Eyre', author: 'Bronte' },
+  { title: 'Wuthering Heights', author: 'Bronte' },
+  { title: 'Ulysses', author: 'Joyce' },
+  { title: 'Don Quixote', author: 'Cervantes' },
+  { title: 'The Brothers Karamazov', author: 'Dostoevsky' },
+];
+
+const SHELF_FICTION = [
+  { title: 'Dune', author: 'Herbert' },
+  { title: 'The Hitchhikers Guide to the Galaxy', author: 'Adams' },
+  { title: 'Foundation', author: 'Asimov' },
+  { title: 'Neuromancer', author: 'Gibson' },
+  { title: 'The Left Hand of Darkness', author: 'Le Guin' },
+  { title: 'Enders Game', author: 'Card' },
+  { title: 'The Martian', author: 'Weir' },
+  { title: 'Annihilation', author: 'VanderMeer' },
+  { title: 'Project Hail Mary', author: 'Weir' },
+  { title: 'The Road', author: 'McCarthy' },
+  { title: 'Never Let Me Go', author: 'Ishiguro' },
+  { title: 'Blindsight', author: 'Watts' },
+  { title: 'A Canticle for Leibowitz', author: 'Miller' },
+  { title: 'The Stars My Destination', author: 'Bester' },
+  { title: 'Flowers for Algernon', author: 'Keyes' },
+  { title: 'Slaughterhouse Five', author: 'Vonnegut' },
+];
+
 async function loadHomePage() {
   if (homeLoaded) return;
-  renderShelfSkeletons('popular-books-grid', 10);
-  renderShelfSkeletons('classics-books-grid', 10);
-  renderShelfSkeletons('fiction-books-grid', 10);
+  renderShelfSkeletons('popular-books-grid', 16);
+  renderShelfSkeletons('classics-books-grid', 16);
+  renderShelfSkeletons('fiction-books-grid', 16);
 
   try {
     const [popular, classics, fiction] = await Promise.all([
-      getPopularBooks('bestseller', 16),
-      getPopularBooks('classic_literature', 16),
-      getPopularBooks('science_fiction', 16),
+      getCuratedShelf(SHELF_POPULAR),
+      getCuratedShelf(SHELF_CLASSICS),
+      getCuratedShelf(SHELF_FICTION),
     ]);
     state.popularBooks = popular;
     state.classicsBooks = classics;
