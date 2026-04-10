@@ -1,9 +1,15 @@
+// ─── SUPABASE ───────────────────────────────────────────────────────────
+const SUPABASE_URL = 'https://ycejifwmvlpjewbsbrub.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljZWppZndtdmxwamV3YnNicnViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MjU4MDksImV4cCI6MjA5MTQwMTgwOX0.wCbsCkjSoSgEBniitnMVmhdiCnTxg94xnzD6K6VUUOA';
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
 // ─── STATE ──────────────────────────────────────────────────────────────
 const state = {
-  username: localStorage.getItem('lbx_username') || 'Reader',
-  readBooks: JSON.parse(localStorage.getItem('lbx_read') || '{}'),
-  ratings: JSON.parse(localStorage.getItem('lbx_ratings') || '{}'),
-  favorites: JSON.parse(localStorage.getItem('lbx_favorites') || '[]'),
+  user: null,           // supabase user object
+  username: 'Reader',
+  readBooks: {},
+  ratings: {},
+  favorites: [],
   currentPage: 'home',
   currentBook: null,
   currentList: null,
@@ -15,11 +21,183 @@ const state = {
   pendingRatingBook: null,
 };
 
-function save() {
+// ─── AUTH ────────────────────────────────────────────────────────────────
+async function initAuth() {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.user) {
+    state.user = session.user;
+    await loadUserData();
+  }
+  updateAuthUI();
+
+  // Listen for auth state changes (login, logout, token refresh)
+  supabase.auth.onAuthStateChange(async (event, session) => {
+    const wasLoggedIn = !!state.user;
+    state.user = session?.user || null;
+    if (state.user && !wasLoggedIn) {
+      await loadUserData();
+    }
+    if (!state.user) {
+      state.readBooks = {};
+      state.ratings = {};
+      state.favorites = [];
+      state.username = 'Reader';
+    }
+    updateAuthUI();
+    // Re-render current page
+    if (state.currentPage === 'profile' && state.user) loadProfilePage();
+  });
+}
+
+function updateAuthUI() {
+  const loggedIn = !!state.user;
+  const loginBtn = document.getElementById('header-login-btn');
+  const signupBtn = document.getElementById('header-signup-btn');
+  const profileLink = document.getElementById('profile-nav-link');
+  const logoutBtn = document.getElementById('header-logout-btn');
+  const heroProfileBtn = document.getElementById('hero-profile-btn');
+
+  if (loginBtn) loginBtn.style.display = loggedIn ? 'none' : '';
+  if (signupBtn) signupBtn.style.display = loggedIn ? 'none' : '';
+  if (profileLink) profileLink.style.display = loggedIn ? '' : 'none';
+  if (logoutBtn) logoutBtn.style.display = loggedIn ? '' : 'none';
+  if (heroProfileBtn) heroProfileBtn.style.display = loggedIn ? '' : 'none';
+
+  const avatarSmall = document.getElementById('profile-avatar-small');
+  if (avatarSmall) avatarSmall.textContent = state.username[0]?.toUpperCase() || 'R';
+}
+
+async function signUp(email, password, username) {
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: { username: username || 'Reader' },
+      emailRedirectTo: 'https://letterbooxd.com',
+    }
+  });
+  if (error) throw error;
+
+  // Migrate any existing localStorage data after signup
+  migrateLocalData(data.user?.id);
+
+  return data;
+}
+
+async function logIn(email, password) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data;
+}
+
+async function logOut() {
+  await supabase.auth.signOut();
+  state.user = null;
+  state.readBooks = {};
+  state.ratings = {};
+  state.favorites = [];
+  state.username = 'Reader';
+  updateAuthUI();
+  navigate('home');
+  showToast('Logged out', 'info');
+}
+
+// Migrate localStorage data to Supabase for first-time signups
+async function migrateLocalData(userId) {
+  if (!userId) return;
+  try {
+    const oldRead = JSON.parse(localStorage.getItem('lbx_read') || '{}');
+    const oldRatings = JSON.parse(localStorage.getItem('lbx_ratings') || '{}');
+    const oldFavs = JSON.parse(localStorage.getItem('lbx_favorites') || '[]');
+
+    const readEntries = Object.values(oldRead).filter(b => b && b.key);
+    if (readEntries.length) {
+      await supabase.from('read_books').upsert(
+        readEntries.map(b => ({
+          user_id: userId, book_key: b.key, title: b.title,
+          author: b.author, cover_url: b.coverUrl, year: b.year, date_read: b.dateRead,
+        })),
+        { onConflict: 'user_id,book_key' }
+      );
+    }
+
+    const ratingEntries = Object.entries(oldRatings).filter(([k, v]) => v > 0);
+    if (ratingEntries.length) {
+      await supabase.from('ratings').upsert(
+        ratingEntries.map(([key, rating]) => ({
+          user_id: userId, book_key: key, rating,
+        })),
+        { onConflict: 'user_id,book_key' }
+      );
+    }
+
+    if (oldFavs.length) {
+      await supabase.from('favorites').upsert(
+        oldFavs.map((f, i) => ({
+          user_id: userId, book_key: f.key, title: f.title,
+          author: f.author, cover_url: f.coverUrl, position: i,
+        })),
+        { onConflict: 'user_id,book_key' }
+      );
+    }
+  } catch (e) {
+    console.warn('Migration failed:', e);
+  }
+}
+
+// ─── DATA LAYER ─────────────────────────────────────────────────────────
+async function loadUserData() {
+  if (!state.user) return;
+  const uid = state.user.id;
+
+  // Load profile
+  const { data: profile } = await supabase
+    .from('profiles').select('username').eq('id', uid).single();
+  state.username = profile?.username || state.user.user_metadata?.username || 'Reader';
+
+  // Load read books
+  const { data: reads } = await supabase
+    .from('read_books').select('*').eq('user_id', uid);
+  state.readBooks = {};
+  (reads || []).forEach(r => {
+    state.readBooks[r.book_key] = {
+      key: r.book_key, title: r.title, author: r.author,
+      coverUrl: r.cover_url, year: r.year, dateRead: r.date_read,
+    };
+  });
+
+  // Load ratings
+  const { data: rats } = await supabase
+    .from('ratings').select('*').eq('user_id', uid);
+  state.ratings = {};
+  (rats || []).forEach(r => { state.ratings[r.book_key] = r.rating; });
+
+  // Load favorites
+  const { data: favs } = await supabase
+    .from('favorites').select('*').eq('user_id', uid).order('position');
+  state.favorites = (favs || []).map(f => ({
+    key: f.book_key, title: f.title, author: f.author, coverUrl: f.cover_url,
+  }));
+}
+
+// Save functions — write to Supabase if logged in, localStorage as fallback
+async function save() {
+  if (state.user) {
+    // Supabase saves happen in individual toggle/action functions
+    return;
+  }
+  // Fallback for non-logged-in browsing (data won't persist across devices)
   localStorage.setItem('lbx_read', JSON.stringify(state.readBooks));
   localStorage.setItem('lbx_ratings', JSON.stringify(state.ratings));
   localStorage.setItem('lbx_favorites', JSON.stringify(state.favorites));
   localStorage.setItem('lbx_username', state.username);
+}
+
+function requireAuth(actionName) {
+  if (state.user) return true;
+  showToast(`Log in to ${actionName}`, 'info');
+  openAuthModal('login');
+  return false;
 }
 
 // ─── CURATED LISTS DATA ──────────────────────────────────────────────────
@@ -1351,10 +1529,21 @@ function bindDetailActions(book) {
   stars.forEach(star => {
     star.addEventListener('mouseenter', () => { const val = parseInt(star.dataset.val); stars.forEach((s, i) => s.classList.toggle('hover-fill', i < val)); });
     star.addEventListener('mouseleave', () => { stars.forEach(s => s.classList.remove('hover-fill')); });
-    star.addEventListener('click', () => {
+    star.addEventListener('click', async () => {
+      if (!requireAuth('rate books')) return;
       const val = parseInt(star.dataset.val);
       const current = state.ratings[book.key] || 0;
       state.ratings[book.key] = current === val ? 0 : val;
+      if (state.user) {
+        if (state.ratings[book.key] > 0) {
+          await supabase.from('ratings').upsert({
+            user_id: state.user.id, book_key: book.key, rating: state.ratings[book.key],
+          }, { onConflict: 'user_id,book_key' });
+        } else {
+          await supabase.from('ratings').delete()
+            .eq('user_id', state.user.id).eq('book_key', book.key);
+        }
+      }
       save();
       stars.forEach((s, i) => s.classList.toggle('filled', i < state.ratings[book.key]));
       showToast(state.ratings[book.key] ? `Rated "${book.title}" ${state.ratings[book.key]}★` : 'Rating removed', 'info');
@@ -1495,6 +1684,11 @@ function bookCardHTML(book) {
 
 // ─── PROFILE ──────────────────────────────────────────────────────────────
 function loadProfilePage() {
+  if (!state.user) {
+    openAuthModal('login');
+    navigate('home');
+    return;
+  }
   const readCount = Object.keys(state.readBooks).length;
   const ratedCount = Object.keys(state.ratings).filter(k => state.ratings[k] > 0).length;
   const favCount = state.favorites.length;
@@ -1503,6 +1697,8 @@ function loadProfilePage() {
   document.getElementById('stat-favs').textContent = favCount;
   document.getElementById('profile-username').textContent = state.username;
   document.getElementById('profile-avatar-letter').textContent = state.username[0].toUpperCase();
+  const emailEl = document.getElementById('profile-email');
+  if (emailEl) emailEl.textContent = state.user.email || '';
   renderFavorites();
   renderReadList();
 }
@@ -1531,8 +1727,13 @@ function renderFavorites() {
   }).join('');
 }
 
-function removeFavorite(index) {
+async function removeFavorite(index) {
+  const fav = state.favorites[index];
   state.favorites.splice(index, 1);
+  if (state.user && fav) {
+    await supabase.from('favorites').delete()
+      .eq('user_id', state.user.id).eq('book_key', fav.key);
+  }
   save();
   renderFavorites();
   showToast('Removed from favourites');
@@ -1565,27 +1766,49 @@ function renderReadList() {
 }
 
 // ─── ACTIONS ──────────────────────────────────────────────────────────────
-function toggleRead(key, title, author, coverUrl, year) {
+async function toggleRead(key, title, author, coverUrl, year) {
+  if (!requireAuth('track books')) return;
   if (state.readBooks[key]) {
     delete state.readBooks[key];
     showToast(`Removed "${title}" from read list`);
+    if (state.user) {
+      await supabase.from('read_books').delete()
+        .eq('user_id', state.user.id).eq('book_key', key);
+    }
   } else {
     const dateRead = new Date().toLocaleDateString('en-NL', { month: 'short', year: 'numeric' });
     state.readBooks[key] = { key, title, author, coverUrl, year, dateRead };
     showToast(`Marked "${title}" as read ✓`);
+    if (state.user) {
+      await supabase.from('read_books').upsert({
+        user_id: state.user.id, book_key: key, title, author,
+        cover_url: coverUrl, year, date_read: dateRead,
+      }, { onConflict: 'user_id,book_key' });
+    }
   }
   save();
 }
 
-function toggleFavorite(book) {
+async function toggleFavorite(book) {
+  if (!requireAuth('add favourites')) return;
   const idx = state.favorites.findIndex(f => f.key === book.key);
   if (idx >= 0) {
     state.favorites.splice(idx, 1);
     showToast('Removed from favourites');
+    if (state.user) {
+      await supabase.from('favorites').delete()
+        .eq('user_id', state.user.id).eq('book_key', book.key);
+    }
   } else {
     if (state.favorites.length >= 4) { showToast('You can only have 4 favourites. Remove one first.', 'error'); return; }
     state.favorites.push({ key: book.key, title: book.title, author: book.author, coverUrl: book.coverUrl });
     showToast(`Added "${book.title}" to favourites ♥`);
+    if (state.user) {
+      await supabase.from('favorites').upsert({
+        user_id: state.user.id, book_key: book.key, title: book.title,
+        author: book.author, cover_url: book.coverUrl, position: state.favorites.length - 1,
+      }, { onConflict: 'user_id,book_key' });
+    }
   }
   save();
 }
@@ -1608,10 +1831,21 @@ function closeRatingModal() {
   state.pendingRatingBook = null;
 }
 
-function saveRating(val) {
+async function saveRating(val) {
   const book = state.pendingRatingBook;
   if (!book) return;
+  if (!requireAuth('rate books')) return;
   state.ratings[book.key] = (state.ratings[book.key] === val) ? 0 : val;
+  if (state.user) {
+    if (state.ratings[book.key] > 0) {
+      await supabase.from('ratings').upsert({
+        user_id: state.user.id, book_key: book.key, rating: state.ratings[book.key],
+      }, { onConflict: 'user_id,book_key' });
+    } else {
+      await supabase.from('ratings').delete()
+        .eq('user_id', state.user.id).eq('book_key', book.key);
+    }
+  }
   save();
   closeRatingModal();
   showToast(state.ratings[book.key] ? `Rated ${state.ratings[book.key]}★` : 'Rating removed');
@@ -1633,8 +1867,49 @@ function escHtml(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+// ─── AUTH MODAL ──────────────────────────────────────────────────────────
+let authMode = 'signup'; // 'signup' or 'login'
+
+function openAuthModal(mode = 'signup') {
+  authMode = mode;
+  const modal = document.getElementById('auth-modal');
+  const title = document.getElementById('auth-modal-title');
+  const subtitle = document.getElementById('auth-modal-subtitle');
+  const submitBtn = document.getElementById('auth-submit-btn');
+  const switchText = document.getElementById('auth-switch-text');
+  const switchLink = document.getElementById('auth-switch-link');
+  const usernameField = document.getElementById('auth-username-field');
+  const errorEl = document.getElementById('auth-error');
+
+  if (mode === 'signup') {
+    title.textContent = 'Sign up';
+    subtitle.textContent = 'Create an account to save your reading history across devices.';
+    submitBtn.textContent = 'Sign up';
+    switchText.textContent = 'Already have an account?';
+    switchLink.textContent = 'Log in';
+    usernameField.style.display = '';
+  } else {
+    title.textContent = 'Log in';
+    subtitle.textContent = 'Welcome back! Log in to access your library.';
+    submitBtn.textContent = 'Log in';
+    switchText.textContent = "Don't have an account?";
+    switchLink.textContent = 'Sign up';
+    usernameField.style.display = 'none';
+  }
+  errorEl.style.display = 'none';
+  modal.classList.add('open');
+}
+
+function closeAuthModal() {
+  document.getElementById('auth-modal').classList.remove('open');
+  document.getElementById('auth-error').style.display = 'none';
+}
+
 // ─── INIT ─────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  // Init auth first
+  await initAuth();
+
   // Nav
   document.querySelectorAll('nav a[data-page]').forEach(a => {
     a.addEventListener('click', e => { e.preventDefault(); navigate(a.dataset.page); });
@@ -1642,6 +1917,68 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('logo-link')?.addEventListener('click', e => { e.preventDefault(); navigate('home'); });
   document.getElementById('profile-nav-link')?.addEventListener('click', e => { e.preventDefault(); navigate('profile'); });
+
+  // Header auth buttons
+  document.getElementById('header-login-btn')?.addEventListener('click', () => openAuthModal('login'));
+  document.getElementById('header-signup-btn')?.addEventListener('click', () => openAuthModal('signup'));
+  document.getElementById('header-logout-btn')?.addEventListener('click', logOut);
+  document.getElementById('profile-logout-btn')?.addEventListener('click', logOut);
+
+  // Auth modal
+  document.getElementById('auth-modal-close')?.addEventListener('click', closeAuthModal);
+  document.getElementById('auth-modal')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeAuthModal(); });
+
+  document.getElementById('auth-switch-link')?.addEventListener('click', e => {
+    e.preventDefault();
+    openAuthModal(authMode === 'signup' ? 'login' : 'signup');
+  });
+
+  document.getElementById('auth-submit-btn')?.addEventListener('click', async () => {
+    const email = document.getElementById('auth-email').value.trim();
+    const password = document.getElementById('auth-password').value;
+    const username = document.getElementById('auth-username').value.trim();
+    const errorEl = document.getElementById('auth-error');
+    const submitBtn = document.getElementById('auth-submit-btn');
+
+    if (!email || !password) { errorEl.textContent = 'Please fill in all fields.'; errorEl.style.display = ''; return; }
+    if (password.length < 6) { errorEl.textContent = 'Password must be at least 6 characters.'; errorEl.style.display = ''; return; }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = authMode === 'signup' ? 'Creating account…' : 'Logging in…';
+
+    try {
+      if (authMode === 'signup') {
+        const data = await signUp(email, password, username || 'Reader');
+        closeAuthModal();
+        // Show confirmation modal
+        document.getElementById('confirm-email-addr').textContent = email;
+        document.getElementById('confirm-modal').classList.add('open');
+      } else {
+        await logIn(email, password);
+        closeAuthModal();
+        showToast(`Welcome back, ${state.username}!`);
+        // Re-render if on profile
+        if (state.currentPage === 'profile') loadProfilePage();
+      }
+    } catch (err) {
+      errorEl.textContent = err.message || 'Something went wrong. Please try again.';
+      errorEl.style.display = '';
+    }
+
+    submitBtn.disabled = false;
+    submitBtn.textContent = authMode === 'signup' ? 'Sign up' : 'Log in';
+  });
+
+  // Allow Enter to submit auth form
+  ['auth-email', 'auth-password', 'auth-username'].forEach(id => {
+    document.getElementById(id)?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('auth-submit-btn')?.click();
+    });
+  });
+
+  document.getElementById('confirm-ok-btn')?.addEventListener('click', () => {
+    document.getElementById('confirm-modal').classList.remove('open');
+  });
 
   // Header search
   document.getElementById('header-search')?.addEventListener('keydown', e => {
@@ -1667,7 +2004,14 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Hero
-  document.getElementById('hero-search-btn')?.addEventListener('click', () => { navigate('search'); setTimeout(() => document.getElementById('main-search-input')?.focus(), 100); });
+  document.getElementById('hero-search-btn')?.addEventListener('click', () => {
+    if (state.user) {
+      navigate('search');
+      setTimeout(() => document.getElementById('main-search-input')?.focus(), 100);
+    } else {
+      openAuthModal('signup');
+    }
+  });
   document.getElementById('hero-profile-btn')?.addEventListener('click', () => navigate('profile'));
 
   // Rating modal stars
@@ -1696,10 +2040,14 @@ document.addEventListener('DOMContentLoaded', () => {
     form.style.display = form.style.display === 'none' ? 'flex' : 'none';
     if (input) { input.value = state.username; input.focus(); }
   });
-  document.getElementById('save-username-btn')?.addEventListener('click', () => {
+  document.getElementById('save-username-btn')?.addEventListener('click', async () => {
     const val = document.getElementById('username-input').value.trim();
     if (val) {
-      state.username = val; save();
+      state.username = val;
+      if (state.user) {
+        await supabase.from('profiles').update({ username: val }).eq('id', state.user.id);
+      }
+      save();
       document.getElementById('profile-username').textContent = val;
       document.getElementById('profile-avatar-letter').textContent = val[0].toUpperCase();
       document.getElementById('profile-avatar-small').textContent = val[0].toUpperCase();
@@ -1707,8 +2055,6 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast('Username updated!');
     }
   });
-
-  document.getElementById('profile-avatar-small').textContent = state.username[0].toUpperCase();
 
   // Shelf arrows
   initShelfArrows();
