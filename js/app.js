@@ -13,7 +13,7 @@ try {
   }
 } catch (e) {
   console.warn('Supabase init failed:', e);
-} //AS
+}
 
 // ─── STATE ──────────────────────────────────────────────────────────────
 const state = {
@@ -242,8 +242,114 @@ function requireAuth(actionName) {
   return false;
 }
 
-// ─── CURATED LISTS DATA ──────────────────────────────────────────────────
-const CURATED_LISTS = {
+// ─── LISTS DATA (loaded from Supabase) ──────────────────────────────────
+// Lists are stored in Supabase tables: lists + list_books
+// Curated lists have is_curated=true and user_id=NULL
+// User lists have is_curated=false and user_id set
+const listsCache = {}; // keyed by list id
+
+async function loadAllLists() {
+  if (!sb) return {};
+  try {
+    // Load all lists (curated + user-created)
+    const { data: lists, error } = await sb
+      .from('lists')
+      .select('*')
+      .order('is_curated', { ascending: false })
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    // Clear and rebuild cache
+    for (const list of (lists || [])) {
+      listsCache[list.id] = {
+        id: list.id,
+        title: list.title,
+        source: list.source || '',
+        year: list.year || '',
+        desc: list.description || '',
+        is_curated: list.is_curated,
+        user_id: list.user_id,
+        books: [], // loaded separately
+      };
+    }
+    return listsCache;
+  } catch (e) {
+    console.warn('Failed to load lists:', e);
+    return {};
+  }
+}
+
+async function loadListBooks(listId) {
+  if (!sb) return [];
+  if (listsCache[listId]?.books?.length) return listsCache[listId].books;
+  try {
+    const { data, error } = await sb
+      .from('list_books')
+      .select('title, author, position')
+      .eq('list_id', listId)
+      .order('position');
+    if (error) throw error;
+    const books = (data || []).map(b => ({ title: b.title, author: b.author }));
+    if (listsCache[listId]) listsCache[listId].books = books;
+    return books;
+  } catch (e) {
+    console.warn('Failed to load list books:', e);
+    return [];
+  }
+}
+
+async function createUserList(title, description, books) {
+  if (!sb || !state.user) throw new Error('Must be logged in');
+  const id = 'user_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+  const { error: listError } = await sb.from('lists').insert({
+    id,
+    user_id: state.user.id,
+    title,
+    source: state.username,
+    year: new Date().getFullYear().toString(),
+    description,
+    is_curated: false,
+  });
+  if (listError) throw listError;
+
+  if (books.length) {
+    const rows = books.map((b, i) => ({
+      list_id: id,
+      title: b.title,
+      author: b.author,
+      position: i,
+    }));
+    const { error: booksError } = await sb.from('list_books').insert(rows);
+    if (booksError) throw booksError;
+  }
+
+  // Update cache
+  listsCache[id] = {
+    id,
+    title,
+    source: state.username,
+    year: new Date().getFullYear().toString(),
+    desc: description,
+    is_curated: false,
+    user_id: state.user.id,
+    books,
+  };
+
+  return id;
+}
+
+async function deleteUserList(listId) {
+  if (!sb || !state.user) return;
+  const list = listsCache[listId];
+  if (!list || list.is_curated || list.user_id !== state.user.id) return;
+  await sb.from('list_books').delete().eq('list_id', listId);
+  await sb.from('lists').delete().eq('id', listId);
+  delete listsCache[listId];
+}
+
+// Fallback hardcoded list IDs for offline mode
+const CURATED_LIST_IDS = ['lemonde', 'modernlibrary', 'telegraph', 'bbc', 'time', 'guardian'];
+
+const CURATED_LISTS_OFFLINE = {
   lemonde: {
     title: "Le Monde's 100 Books of the Century",
     source: "Le Monde",
@@ -892,114 +998,290 @@ const CURATED_LISTS = {
   }
 };
 
+// Get a list by ID — tries cache (Supabase) first, falls back to offline data
+function getListData(listId) {
+  if (listsCache[listId] && listsCache[listId].books?.length) return listsCache[listId];
+  if (CURATED_LISTS_OFFLINE[listId]) {
+    const off = CURATED_LISTS_OFFLINE[listId];
+    return { id: listId, title: off.title, source: off.source, year: off.year, desc: off.desc, is_curated: true, books: off.books };
+  }
+  return listsCache[listId] || null;
+}
+
 // ─── GOOGLE BOOKS API ────────────────────────────────────────────────────
 // Uses Google Books for search & covers — no API key needed for basic use,
 // falls back to Open Library covers when Google has none.
 const OL = 'https://openlibrary.org';
 
-async function searchBooks(query, limit = 20) {
-  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=${Math.min(limit,40)}&printType=books&langRestrict=en`;
-  const res = await fetch(url);
-  const data = await res.json();
-  return (data.items || []).map(normalizeGoogleBook);
+const NON_BOOK_CATEGORY_HINTS = [
+  'study aids',
+  'foreign language study',
+  'language arts',
+  'literary criticism',
+  'criticism',
+  'history',
+  'science',
+  'mathematics',
+  'medical',
+  'education',
+  'philosophy',
+  'psychology',
+  'reference',
+  'textbooks',
+  'business & economics',
+  'political science',
+  'social science',
+  'technology',
+  'computers'
+];
+
+const NON_BOOK_TITLE_HINTS = [
+  'paper',
+  'proceedings',
+  'journal',
+  'conference',
+  'review',
+  'handbook',
+  'guide',
+  'textbook',
+  'manual',
+  'workbook',
+  'anthology of criticism'
+];
+
+function normalizeText(s = '') {
+  return s
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-async function searchBooksForList(title, author) {
-  const q = `intitle:${title} inauthor:${author}`;
-  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=3&printType=books`;
-  const res = await fetch(url);
-  const data = await res.json();
-  let book = null;
-  if (data.items?.length) {
-    const withCover = data.items.find(i => i.volumeInfo?.imageLinks);
-    book = normalizeGoogleBook(withCover || data.items[0]);
+function levenshtein(a = '', b = '') {
+  const aa = normalizeText(a);
+  const bb = normalizeText(b);
+  const dp = Array.from({ length: aa.length + 1 }, () => Array(bb.length + 1).fill(0));
+
+  for (let i = 0; i <= aa.length; i++) dp[i][0] = i;
+  for (let j = 0; j <= bb.length; j++) dp[0][j] = j;
+
+  for (let i = 1; i <= aa.length; i++) {
+    for (let j = 1; j <= bb.length; j++) {
+      const cost = aa[i - 1] === bb[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      );
+    }
   }
-  if (!book) book = { key: title, title, author, coverUrl: null, year: '', pages: null, description: '' };
-  if (!book.coverUrl) {
-    book.coverUrl = await getWikipediaCover(title, author);
-  }
-  if (!book.coverUrl) {
-    book.coverUrl = `https://covers.openlibrary.org/b/title/${encodeURIComponent(title)}-M.jpg?default=false`;
-  }
-  return book;
+  return dp[aa.length][bb.length];
 }
 
-async function fetchBookDetails(key) {
-  // key is either a Google Books volume id or an OL works key
-  if (key.startsWith('/works/')) {
-    const res = await fetch(`${OL}${key}.json`);
-    return await res.json();
+function similarity(a = '', b = '') {
+  const aa = normalizeText(a);
+  const bb = normalizeText(b);
+  if (!aa && !bb) return 1;
+  const dist = levenshtein(aa, bb);
+  return 1 - dist / Math.max(aa.length, bb.length, 1);
+}
+
+function looksEnglishTitle(title = '') {
+  if (!title) return false;
+  return /^[A-Za-z0-9\s'".,:;!?&()\-]+$/.test(title);
+}
+
+function isLikelyResearchOrNonTradeBook(info = {}) {
+  const title = normalizeText(info.title || '');
+  const categories = (info.categories || []).map(normalizeText);
+  const publisher = normalizeText(info.publisher || '');
+
+  if (NON_BOOK_TITLE_HINTS.some(h => title.includes(h))) return true;
+  if (categories.some(c => NON_BOOK_CATEGORY_HINTS.some(h => c.includes(h)))) return true;
+  if (publisher.includes('springer') || publisher.includes('wiley') || publisher.includes('crc press')) return true;
+
+  if ((info.pageCount || 0) > 1200) return true;
+
+  return false;
+}
+
+function getBestGoogleCover(info = {}) {
+  if (!info.imageLinks) return null;
+
+  const base =
+    info.imageLinks.extraLarge ||
+    info.imageLinks.large ||
+    info.imageLinks.medium ||
+    info.imageLinks.small ||
+    info.imageLinks.thumbnail ||
+    info.imageLinks.smallThumbnail ||
+    '';
+
+  if (!base) return null;
+
+  return base
+    .replace('http://', 'https://')
+    .replace('&edge=curl', '')
+    .replace(/zoom=\d+/g, 'zoom=3');
+}
+
+function buildBookScore(item, expectedTitle = '', expectedAuthor = '') {
+  const info = item.volumeInfo || {};
+  let score = 0;
+
+  if (info.language === 'en') score += 40;
+  if (looksEnglishTitle(info.title)) score += 25;
+  if (info.printType === 'BOOK') score += 15;
+  if (info.imageLinks?.extraLarge) score += 20;
+  else if (info.imageLinks?.large) score += 16;
+  else if (info.imageLinks?.medium) score += 12;
+  else if (info.imageLinks?.thumbnail) score += 6;
+
+  if (expectedTitle) {
+    const titleSim = similarity(info.title || '', expectedTitle);
+    score += Math.round(titleSim * 40);
+
+    if (normalizeText(info.title) === normalizeText(expectedTitle)) score += 20;
   }
-  const res = await fetch(`https://www.googleapis.com/books/v1/volumes/${key}`);
-  return await res.json();
-}
 
-async function getPopularBooks(subject, limit = 16) {
-  const url = `https://www.googleapis.com/books/v1/volumes?q=subject:${encodeURIComponent(subject)}&maxResults=${Math.min(limit,40)}&orderBy=relevance&printType=books&langRestrict=en`;
-  const res = await fetch(url);
-  const data = await res.json();
-  return (data.items || []).map(normalizeGoogleBook);
-}
+  if (expectedAuthor && info.authors?.length) {
+    const bestAuthorSim = Math.max(
+      ...info.authors.map(a => similarity(a, expectedAuthor)),
+      0
+    );
+    score += Math.round(bestAuthorSim * 25);
+  }
 
-// Fetch a curated shelf — tries Google Books first, falls back to Wikipedia for cover
-// Always returns ALL books (even without covers) so shelves stay full
-async function getCuratedShelf(titles) {
-  const results = await Promise.allSettled(
-    titles.map(async ({ title, author }) => {
-      try {
-        const q = `intitle:${title} inauthor:${author}`;
-        const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=3&printType=books`);
-        const data = await res.json();
-        // Try to pick the result with a cover, falling back to first
-        let book = null;
-        if (data.items?.length) {
-          const withCover = data.items.find(i => i.volumeInfo?.imageLinks);
-          book = normalizeGoogleBook(withCover || data.items[0]);
-        }
-        if (!book) book = { key: title, title, author, coverUrl: null, year: '', pages: null, description: '' };
-        // If no cover from Google, try Wikipedia
-        if (!book.coverUrl) {
-          book.coverUrl = await getWikipediaCover(title, author);
-        }
-        // If still no cover, try Open Library covers API
-        if (!book.coverUrl) {
-          book.coverUrl = `https://covers.openlibrary.org/b/title/${encodeURIComponent(title)}-M.jpg?default=false`;
-        }
-        return book;
-      } catch {
-        return { key: title, title, author, coverUrl: null, year: '', pages: null, description: '' };
-      }
-    })
-  );
-  return results
-    .filter(r => r.status === 'fulfilled' && r.value)
-    .map(r => r.value);
+  if (info.averageRating) score += Math.min(10, Math.round(info.averageRating));
+  if (info.ratingsCount) score += Math.min(10, Math.floor(info.ratingsCount / 100));
+
+  if (isLikelyResearchOrNonTradeBook(info)) score -= 80;
+  if (info.language && info.language !== 'en') score -= 100;
+  if (!looksEnglishTitle(info.title)) score -= 50;
+
+  return score;
 }
 
 function normalizeGoogleBook(item) {
   const info = item.volumeInfo || {};
-  let coverUrl = null;
-  if (info.imageLinks) {
-    // Try to get the best available image, bump zoom for quality
-    const base = (info.imageLinks.extraLarge || info.imageLinks.large ||
-                  info.imageLinks.medium || info.imageLinks.thumbnail ||
-                  info.imageLinks.smallThumbnail || '');
-    coverUrl = base
-      .replace('http://', 'https://')
-      .replace('&edge=curl', '')
-      .replace('zoom=1', 'zoom=2')
-      .replace('zoom=1', 'zoom=2');
-  }
+
   return {
     key: item.id,
     title: info.title || 'Unknown Title',
     author: info.authors?.[0] || 'Unknown Author',
-    coverUrl: coverUrl,
+    coverUrl: getBestGoogleCover(info),
     year: info.publishedDate?.substring(0, 4) || '',
     pages: info.pageCount || null,
     description: info.description || '',
     categories: info.categories || [],
+    language: info.language || '',
+    averageRating: info.averageRating || null,
+    ratingsCount: info.ratingsCount || 0,
+    publisher: info.publisher || '',
   };
+}
+
+function filterAndRankGoogleBooks(items, { expectedTitle = '', expectedAuthor = '' } = {}) {
+  return (items || [])
+    .filter(item => {
+      const info = item.volumeInfo || {};
+      if (info.printType && info.printType !== 'BOOK') return false;
+      if (info.language && info.language !== 'en') return false;
+      if (!info.title) return false;
+      if (!looksEnglishTitle(info.title)) return false;
+      if (isLikelyResearchOrNonTradeBook(info)) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      const aScore = buildBookScore(a, expectedTitle, expectedAuthor);
+      const bScore = buildBookScore(b, expectedTitle, expectedAuthor);
+      return bScore - aScore;
+    });
+}
+
+async function searchBooks(query, limit = 20) {
+  const q = `${query} -journal -proceedings -textbook -handbook -manual`;
+  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=40&printType=books&langRestrict=en&orderBy=relevance`;
+  const res = await fetch(url);
+  const data = await res.json();
+
+  const ranked = filterAndRankGoogleBooks(data.items || []);
+  return ranked.slice(0, limit).map(normalizeGoogleBook);
+}
+
+async function searchBooksForList(title, author) {
+  const q = `intitle:"${title}" inauthor:"${author}" -journal -proceedings -textbook -handbook`;
+  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=10&printType=books&langRestrict=en&orderBy=relevance`;
+  const res = await fetch(url);
+  const data = await res.json();
+
+  const ranked = filterAndRankGoogleBooks(data.items || [], {
+    expectedTitle: title,
+    expectedAuthor: author
+  });
+
+  let book = ranked.length ? normalizeGoogleBook(ranked[0]) : null;
+
+  if (!book) {
+    book = {
+      key: title,
+      title,
+      author,
+      coverUrl: null,
+      year: '',
+      pages: null,
+      description: '',
+      categories: [],
+      language: 'en'
+    };
+  }
+
+  if (!book.coverUrl) {
+    book.coverUrl = await getWikipediaCover(title, author);
+  }
+
+  if (!book.coverUrl) {
+    book.coverUrl = `https://covers.openlibrary.org/b/title/${encodeURIComponent(title)}-L.jpg?default=false`;
+  }
+
+  return book;
+}
+
+async function getPopularBooks(subject, limit = 16) {
+  const q = `subject:${subject} -journal -proceedings -textbook -handbook`;
+  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=40&orderBy=relevance&printType=books&langRestrict=en`;
+  const res = await fetch(url);
+  const data = await res.json();
+
+  const ranked = filterAndRankGoogleBooks(data.items || []);
+  return ranked.slice(0, limit).map(normalizeGoogleBook);
+}
+
+async function getCuratedShelf(titles) {
+  const results = await Promise.allSettled(
+    titles.map(async ({ title, author }) => {
+      try {
+        return await searchBooksForList(title, author);
+      } catch {
+        return {
+          key: title,
+          title,
+          author,
+          coverUrl: null,
+          year: '',
+          pages: null,
+          description: '',
+          categories: [],
+          language: 'en'
+        };
+      }
+    })
+  );
+
+  return results
+    .filter(r => r.status === 'fulfilled' && r.value)
+    .map(r => r.value);
 }
 
 // Wikipedia cover fallback — fetches the book's main image from its Wikipedia article
@@ -1246,21 +1528,112 @@ function initShelfArrows() {
 }
 
 // ─── LISTS PAGE ───────────────────────────────────────────────────────────
+let listsPageLoaded = false;
+
 async function loadListsPreviews() {
-  const listIds = ['lemonde', 'modernlibrary', 'telegraph', 'bbc', 'time', 'guardian'];
-  for (const id of listIds) {
-    const list = CURATED_LISTS[id];
-    const previewEl = document.getElementById(`${id}-preview`);
+  const container = document.getElementById('lists-dynamic-container');
+  if (!container) return;
+
+  // Show loading state
+  if (!listsPageLoaded) {
+    container.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">Loading lists…</div>`;
+  }
+
+  // Load lists from Supabase
+  await loadAllLists();
+
+  const allLists = Object.values(listsCache);
+  const curated = allLists.filter(l => l.is_curated);
+  const userLists = allLists.filter(l => !l.is_curated);
+
+  let html = '';
+
+  // Curated lists
+  for (const list of curated) {
+    html += listCardHTML(list, 'curated');
+  }
+
+  // User lists section
+  if (userLists.length) {
+    html += `<div class="lists-section-divider" style="grid-column:1/-1;border-top:1px solid var(--border);margin:12px 0 4px;padding-top:20px">
+      <h3 style="font-family:'Playfair Display',serif;font-size:18px;color:#fff;margin-bottom:12px">Community Lists</h3>
+    </div>`;
+    for (const list of userLists) {
+      html += listCardHTML(list, 'user');
+    }
+  }
+
+  // Offline fallback if no Supabase lists loaded
+  if (!allLists.length) {
+    for (const id of CURATED_LIST_IDS) {
+      const list = CURATED_LISTS_OFFLINE[id];
+      if (list) {
+        html += listCardHTML({
+          id, title: list.title, source: list.source, year: list.year,
+          desc: list.desc, is_curated: true, books: list.books,
+        }, 'curated');
+      }
+    }
+  }
+
+  container.innerHTML = html;
+
+  // Bind click events
+  container.querySelectorAll('.list-card').forEach(card => {
+    card.addEventListener('click', () => openList(card.dataset.listId));
+  });
+
+  // Bind delete buttons
+  container.querySelectorAll('.list-delete-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const listId = btn.dataset.listId;
+      if (!confirm('Delete this list?')) return;
+      await deleteUserList(listId);
+      showToast('List deleted');
+      listsPageLoaded = false;
+      loadListsPreviews();
+    });
+  });
+
+  // Load preview covers for each list
+  loadListPreviewCovers();
+  listsPageLoaded = true;
+}
+
+function listCardHTML(list, type) {
+  const bookCount = list.books?.length || '…';
+  const isOwn = state.user && list.user_id === state.user.id;
+  return `
+    <div class="list-card" data-list-id="${escHtml(list.id)}">
+      <div class="list-card-books" id="${escHtml(list.id)}-preview">
+        ${Array(5).fill(0).map(() => `<div class="list-placeholder-cover">📚</div>`).join('')}
+      </div>
+      <div class="list-card-info">
+        <div class="list-card-title">${escHtml(list.title)}</div>
+        <div class="list-card-meta">${escHtml(list.source)} · ${bookCount} books${list.year ? ' · ' + escHtml(list.year) : ''}</div>
+        <div class="list-card-desc">${escHtml(list.desc)}</div>
+        ${isOwn ? `<button class="list-delete-btn btn btn-secondary btn-sm" data-list-id="${escHtml(list.id)}" style="margin-top:8px;font-size:11px;padding:3px 10px;color:#e74c3c;border-color:#e74c3c">Delete</button>` : ''}
+      </div>
+    </div>`;
+}
+
+async function loadListPreviewCovers() {
+  const allLists = Object.values(listsCache).length ? Object.values(listsCache) : CURATED_LIST_IDS.map(id => ({id, ...(CURATED_LISTS_OFFLINE[id] || {})}));
+
+  for (const list of allLists) {
+    const previewEl = document.getElementById(`${list.id}-preview`);
     if (!previewEl || previewEl.dataset.loaded) continue;
     previewEl.dataset.loaded = '1';
 
-    // show 5 placeholder slots immediately
-    previewEl.innerHTML = list.books.slice(0, 5).map(() =>
-      `<div class="list-placeholder-cover">📚</div>`
-    ).join('');
+    // Load books if not already loaded
+    let books = list.books;
+    if (!books?.length) {
+      books = await loadListBooks(list.id);
+    }
+    if (!books?.length) continue;
 
-    // fetch covers for first 5
-    const first5 = list.books.slice(0, 5);
+    const first5 = books.slice(0, 5);
     const results = await Promise.allSettled(
       first5.map(b => searchBooksForList(b.title, b.author))
     );
@@ -1286,7 +1659,18 @@ function openList(listId) {
 }
 
 async function loadListDetail(listId) {
-  const list = CURATED_LISTS[listId];
+  let list = getListData(listId);
+  
+  // If books not loaded yet, fetch them
+  if (!list || !list.books?.length) {
+    const books = await loadListBooks(listId);
+    list = getListData(listId);
+    if (!list) {
+      // Try offline fallback
+      list = CURATED_LISTS_OFFLINE[listId];
+      if (list) list = { id: listId, title: list.title, source: list.source, year: list.year, desc: list.desc, is_curated: true, books: list.books };
+    }
+  }
   if (!list) return;
 
   const readCount = list.books.filter(b =>
@@ -1909,6 +2293,124 @@ function escHtml(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+// ─── CREATE LIST MODAL ────────────────────────────────────────────────────
+let createListBooks = []; // books added to the new list
+
+function openCreateListModal() {
+  if (!requireAuth('create lists')) return;
+  createListBooks = [];
+  const modal = document.getElementById('create-list-modal');
+  document.getElementById('create-list-title').value = '';
+  document.getElementById('create-list-desc').value = '';
+  document.getElementById('create-list-search').value = '';
+  document.getElementById('create-list-search-results').innerHTML = '';
+  renderCreateListBooks();
+  modal.classList.add('open');
+}
+
+function closeCreateListModal() {
+  document.getElementById('create-list-modal').classList.remove('open');
+  createListBooks = [];
+}
+
+function renderCreateListBooks() {
+  const el = document.getElementById('create-list-books');
+  if (!el) return;
+  if (!createListBooks.length) {
+    el.innerHTML = `<div style="color:var(--text-muted);font-size:13px;font-style:italic;padding:12px 0">No books added yet. Search above to add books.</div>`;
+    return;
+  }
+  el.innerHTML = createListBooks.map((b, i) => `
+    <div class="create-list-book-item">
+      <span class="create-list-book-num">${i + 1}</span>
+      <div class="create-list-book-info">
+        <div class="create-list-book-title">${escHtml(b.title)}</div>
+        <div class="create-list-book-author">${escHtml(b.author)}</div>
+      </div>
+      <button class="create-list-remove-btn" data-idx="${i}" title="Remove">✕</button>
+    </div>
+  `).join('');
+
+  el.querySelectorAll('.create-list-remove-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      createListBooks.splice(parseInt(btn.dataset.idx), 1);
+      renderCreateListBooks();
+    });
+  });
+}
+
+async function searchBooksForListCreation(query) {
+  const resultsEl = document.getElementById('create-list-search-results');
+  if (!query.trim()) { resultsEl.innerHTML = ''; return; }
+  resultsEl.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:8px 0">Searching…</div>`;
+  try {
+    // Use a simpler query than searchBooks — no negative keywords, less aggressive filtering
+    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=12&printType=books&langRestrict=en&orderBy=relevance`;
+    const res = await fetch(url);
+    const data = await res.json();
+    const results = (data.items || [])
+      .filter(item => item.volumeInfo?.title)
+      .slice(0, 8)
+      .map(normalizeGoogleBook);
+    if (!results.length) {
+      resultsEl.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:8px 0">No results found.</div>`;
+      return;
+    }
+    resultsEl.innerHTML = results.map(b => `
+      <div class="create-list-search-item" data-key="${escHtml(b.key)}" data-title="${escHtml(b.title)}" data-author="${escHtml(b.author)}">
+        <div style="font-size:13px;font-weight:500;color:var(--text-primary)">${escHtml(b.title)}</div>
+        <div style="font-size:12px;color:var(--text-muted)">${escHtml(b.author)}</div>
+      </div>
+    `).join('');
+
+    resultsEl.querySelectorAll('.create-list-search-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const title = item.dataset.title;
+        const author = item.dataset.author;
+        // Don't add duplicates
+        if (createListBooks.some(b => b.title === title && b.author === author)) {
+          showToast('Already in list', 'info');
+          return;
+        }
+        createListBooks.push({ title, author });
+        renderCreateListBooks();
+        showToast(`Added "${title}"`);
+        // Clear search
+        document.getElementById('create-list-search').value = '';
+        resultsEl.innerHTML = '';
+      });
+    });
+  } catch (e) {
+    console.error('List search failed:', e);
+    resultsEl.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:8px 0">Search failed. Try a different query.</div>`;
+  }
+}
+
+async function submitCreateList() {
+  const title = document.getElementById('create-list-title').value.trim();
+  const desc = document.getElementById('create-list-desc').value.trim();
+  const submitBtn = document.getElementById('create-list-submit');
+
+  if (!title) { showToast('Please add a title', 'error'); return; }
+  if (!createListBooks.length) { showToast('Add at least one book', 'error'); return; }
+
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Creating…';
+
+  try {
+    const listId = await createUserList(title, desc, createListBooks);
+    closeCreateListModal();
+    showToast('List created!');
+    listsPageLoaded = false;
+    loadListsPreviews();
+  } catch (e) {
+    showToast(e.message || 'Failed to create list', 'error');
+  }
+
+  submitBtn.disabled = false;
+  submitBtn.textContent = 'Create List';
+}
+
 // ─── AUTH MODAL ──────────────────────────────────────────────────────────
 let authMode = 'signup'; // 'signup' or 'login'
 
@@ -2100,6 +2602,24 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Shelf arrows
   initShelfArrows();
+
+  // Create list modal
+  document.getElementById('create-list-btn')?.addEventListener('click', openCreateListModal);
+  document.getElementById('create-list-modal-close')?.addEventListener('click', closeCreateListModal);
+  document.getElementById('create-list-modal')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeCreateListModal(); });
+  document.getElementById('create-list-submit')?.addEventListener('click', submitCreateList);
+
+  let createListSearchTimer = null;
+  document.getElementById('create-list-search')?.addEventListener('input', (e) => {
+    clearTimeout(createListSearchTimer);
+    createListSearchTimer = setTimeout(() => searchBooksForListCreation(e.target.value), 400);
+  });
+  document.getElementById('create-list-search')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      clearTimeout(createListSearchTimer);
+      searchBooksForListCreation(e.target.value);
+    }
+  });
 
   navigate('home');
 });

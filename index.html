@@ -99,68 +99,17 @@
 <!-- ─── LISTS PAGE ─────────────────────────────────────────────────────── -->
 <div class="page" id="page-lists">
   <div class="search-hero">
-    <div class="search-hero-inner">
-      <h2>Lists</h2>
-      <p style="color:var(--text-muted);font-size:14px;margin-top:6px">Curated reading lists from the world's greatest literary institutions.</p>
+    <div class="search-hero-inner" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+      <div>
+        <h2>Lists</h2>
+        <p style="color:var(--text-muted);font-size:14px;margin-top:6px">Curated reading lists and community collections.</p>
+      </div>
+      <button class="btn btn-primary" id="create-list-btn">+ Create a List</button>
     </div>
   </div>
   <main>
-    <div class="lists-grid">
-
-      <div class="list-card" onclick="openList('lemonde')">
-        <div class="list-card-books" id="lemonde-preview"></div>
-        <div class="list-card-info">
-          <div class="list-card-title">Le Monde's 100 Books of the Century</div>
-          <div class="list-card-meta">Le Monde · 100 books</div>
-          <div class="list-card-desc">The French newspaper's definitive selection of the greatest books of the 20th century, voted by readers in 1999.</div>
-        </div>
-      </div>
-
-      <div class="list-card" onclick="openList('modernlibrary')">
-        <div class="list-card-books" id="modernlibrary-preview"></div>
-        <div class="list-card-info">
-          <div class="list-card-title">Modern Library 100 Best Novels</div>
-          <div class="list-card-meta">Modern Library · 100 books</div>
-          <div class="list-card-desc">The board's selection of the 100 best English-language novels published since 1900.</div>
-        </div>
-      </div>
-
-      <div class="list-card" onclick="openList('telegraph')">
-        <div class="list-card-books" id="telegraph-preview"></div>
-        <div class="list-card-info">
-          <div class="list-card-title">The Telegraph's Greatest Villains in Literature</div>
-          <div class="list-card-meta">The Telegraph · 50 books</div>
-          <div class="list-card-desc">The most compelling, chilling and unforgettable antagonists ever committed to the page.</div>
-        </div>
-      </div>
-
-      <div class="list-card" onclick="openList('bbc')">
-        <div class="list-card-books" id="bbc-preview"></div>
-        <div class="list-card-info">
-          <div class="list-card-title">BBC's 100 Novels That Shaped Our World</div>
-          <div class="list-card-meta">BBC · 100 books</div>
-          <div class="list-card-desc">A celebration of fiction that has had a profound impact on culture, society and our understanding of what it means to be human.</div>
-        </div>
-      </div>
-
-      <div class="list-card" onclick="openList('time')">
-        <div class="list-card-books" id="time-preview"></div>
-        <div class="list-card-info">
-          <div class="list-card-title">TIME's 100 Best Novels</div>
-          <div class="list-card-meta">TIME Magazine · 100 books</div>
-          <div class="list-card-desc">TIME critics Lev Grossman and Richard Lacayo's picks for the 100 best English-language novels from 1923 to the present.</div>
-        </div>
-      </div>
-
-      <div class="list-card" onclick="openList('guardian')">
-        <div class="list-card-books" id="guardian-preview"></div>
-        <div class="list-card-info">
-          <div class="list-card-title">The Guardian's 100 Best Novels</div>
-          <div class="list-card-meta">The Guardian · 100 books</div>
-          <div class="list-card-desc">Robert McCrum's selection of the finest novels written in English, from Robinson Crusoe to American Pastoral.</div>
-        </div>
-      </div>
-
+    <div class="lists-grid" id="lists-dynamic-container">
+      <div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">Loading lists…</div>
     </div>
   </main>
 </div>
@@ -291,6 +240,26 @@
     <h3>Check your email</h3>
     <p style="color:var(--text-muted);font-size:14px;margin-top:8px;line-height:1.6">We sent a confirmation link to <strong id="confirm-email-addr"></strong>. Click it to activate your account.</p>
     <button class="btn btn-secondary" id="confirm-ok-btn" style="margin-top:20px">Got it</button>
+  </div>
+</div>
+
+<!-- ─── CREATE LIST MODAL ────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="create-list-modal">
+  <div class="modal auth-modal" style="max-width:520px">
+    <h3>Create a List</h3>
+    <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Build your own reading list and share it with the community.</p>
+    <div class="auth-form">
+      <label class="auth-label">List Title</label>
+      <input type="text" id="create-list-title" placeholder="e.g. My Favourite Sci-Fi" maxlength="100" autocomplete="off">
+      <label class="auth-label">Description (optional)</label>
+      <input type="text" id="create-list-desc" placeholder="What's this list about?" maxlength="300" autocomplete="off">
+      <label class="auth-label">Add Books</label>
+      <input type="text" id="create-list-search" placeholder="Search by title or author…" autocomplete="off">
+      <div id="create-list-search-results" class="create-list-search-results"></div>
+      <div id="create-list-books" class="create-list-books"></div>
+      <button class="btn btn-primary" id="create-list-submit" style="width:100%;margin-top:8px">Create List</button>
+    </div>
+    <button class="modal-close-x" id="create-list-modal-close">✕</button>
   </div>
 </div>
 
