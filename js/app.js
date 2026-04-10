@@ -672,72 +672,61 @@ const CURATED_LISTS = {
   }
 };
 
-// ─── GOOGLE BOOKS API ────────────────────────────────────────────────────
-// Uses Google Books for search & covers — no API key needed for basic use,
-// falls back to Open Library covers when Google has none.
+// ─── OPEN LIBRARY API ────────────────────────────────────────────────────
+const COVERS = 'https://covers.openlibrary.org/b/id/';
 const OL = 'https://openlibrary.org';
 
 async function searchBooks(query, limit = 20) {
-  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=${Math.min(limit,40)}&printType=books&langRestrict=en`;
+  const url = `${OL}/search.json?q=${encodeURIComponent(query)}&limit=${limit}&fields=key,title,author_name,cover_i,first_publish_year,number_of_pages_median`;
   const res = await fetch(url);
   const data = await res.json();
-  return (data.items || []).map(normalizeGoogleBook);
+  return (data.docs || []).map(normalizeBook);
 }
 
 async function searchBooksForList(title, author) {
-  const q = `intitle:${title} inauthor:${author}`;
-  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=1&printType=books`;
+  const q = `${title} ${author}`;
+  const url = `${OL}/search.json?q=${encodeURIComponent(q)}&limit=1&fields=key,title,author_name,cover_i,first_publish_year`;
   const res = await fetch(url);
   const data = await res.json();
-  if (data.items && data.items[0]) return normalizeGoogleBook(data.items[0]);
+  if (data.docs && data.docs[0]) return normalizeBook(data.docs[0]);
   return null;
 }
 
 async function fetchBookDetails(key) {
-  // key is either a Google Books volume id or an OL works key
-  if (key.startsWith('/works/')) {
-    const res = await fetch(`${OL}${key}.json`);
-    return await res.json();
-  }
-  const res = await fetch(`https://www.googleapis.com/books/v1/volumes/${key}`);
+  const res = await fetch(`${OL}${key}.json`);
   return await res.json();
 }
 
 async function getPopularBooks(subject, limit = 16) {
-  const url = `https://www.googleapis.com/books/v1/volumes?q=subject:${encodeURIComponent(subject)}&maxResults=${Math.min(limit,40)}&orderBy=relevance&printType=books&langRestrict=en`;
+  const url = `${OL}/subjects/${subject}.json?limit=${limit}`;
   const res = await fetch(url);
   const data = await res.json();
-  return (data.items || []).map(normalizeGoogleBook);
+  return (data.works || []).map(w => ({
+    key: w.key,
+    title: w.title,
+    author: w.authors?.[0]?.name || 'Unknown Author',
+    coverId: w.cover_id || null,
+    year: w.first_publish_year || '',
+  }));
 }
 
-function normalizeGoogleBook(item) {
-  const info = item.volumeInfo || {};
-  // Google Books thumbnail — upgrade to zoom=1 for better quality, strip curl=edge
-  let coverUrl = null;
-  if (info.imageLinks) {
-    coverUrl = (info.imageLinks.thumbnail || info.imageLinks.smallThumbnail || '')
-      .replace('http://', 'https://')
-      .replace('&edge=curl', '')
-      .replace('zoom=1', 'zoom=2');
-  }
+function normalizeBook(doc) {
   return {
-    key: item.id,
-    title: info.title || 'Unknown Title',
-    author: info.authors?.[0] || 'Unknown Author',
-    coverUrl: coverUrl,  // direct URL instead of an ID
-    year: info.publishedDate?.substring(0, 4) || '',
-    pages: info.pageCount || null,
-    description: info.description || '',
-    categories: info.categories || [],
+    key: doc.key,
+    title: doc.title,
+    author: doc.author_name?.[0] || 'Unknown Author',
+    coverId: doc.cover_i,
+    year: doc.first_publish_year || '',
+    pages: doc.number_of_pages_median || null,
   };
 }
 
-function coverUrl(idOrUrl, size = 'M') {
-  // For Google Books we store the full URL directly
-  if (!idOrUrl) return null;
-  if (idOrUrl.startsWith('http')) return idOrUrl;
-  // Legacy Open Library ID fallback
-  return `https://covers.openlibrary.org/b/id/${idOrUrl}-${size}.jpg`;
+function coverUrl(id, size = 'M') {
+  if (!id) return null;
+  const sizeMap = { S: 40, M: 180, L: 400 };
+  const w = sizeMap[size] || 180;
+  const raw = `${COVERS}${id}-${size}.jpg`;
+  return `/.netlify/images?url=${encodeURIComponent(raw)}&w=${w}&q=70`;
 }
 
 // ─── ROUTER ──────────────────────────────────────────────────────────────
@@ -840,7 +829,7 @@ function renderShelfBooks(containerId, books) {
 
 function shelfBookHTML(book) {
   const isRead = !!state.readBooks[book.key];
-  const cover = coverUrl(book.coverUrl);
+  const cover = coverUrl(book.coverId);
   return `
     <div class="book-card" data-key="${escHtml(book.key)}">
       <div class="book-cover-wrap">
@@ -855,7 +844,7 @@ function shelfBookHTML(book) {
           <div class="overlay-actions">
             <button class="overlay-btn mark-read ${isRead ? 'read' : ''}"
               data-key="${escHtml(book.key)}" data-title="${escHtml(book.title)}"
-              data-author="${escHtml(book.author)}" data-cover="${book.coverUrl || ''}"
+              data-author="${escHtml(book.author)}" data-cover="${book.coverId || ''}"
               data-year="${book.year || ''}" title="${isRead ? 'Mark unread' : 'Mark as read'}">
               ${isRead ? '✓' : '📖'}
             </button>
@@ -931,9 +920,9 @@ async function loadListsPreviews() {
 
     const slots = previewEl.querySelectorAll('.list-placeholder-cover');
     results.forEach((r, i) => {
-      if (r.status === 'fulfilled' && r.value && r.value.coverUrl) {
+      if (r.status === 'fulfilled' && r.value && r.value.coverId) {
         const img = document.createElement('img');
-        img.src = coverUrl(r.value.coverUrl, 'S');
+        img.src = coverUrl(r.value.coverId, 'S');
         img.alt = first5[i].title;
         img.style.flex = '1';
         img.style.objectFit = 'cover';
@@ -1014,8 +1003,8 @@ async function loadListCovers(books) {
       if (!el) return;
       if (r.status === 'fulfilled' && r.value) {
         const book = r.value;
-        if (book.coverUrl) {
-          el.innerHTML = `<img class="book-list-cover" src="${coverUrl(book.coverUrl)}" alt="" onerror="this.style.display='none'">`;
+        if (book.coverId) {
+          el.innerHTML = `<img class="book-list-cover" src="${coverUrl(book.coverId)}" alt="" onerror="this.style.display='none'">`;
         }
         // bind click to open book detail
         const row = el.closest('.list-book-row');
@@ -1038,7 +1027,7 @@ async function loadBookDetail(book) {
   const isRead = !!state.readBooks[book.key];
   const rating = state.ratings[book.key] || 0;
   const isFav = state.favorites.some(f => f.key === book.key);
-  const cover = coverUrl(book.coverUrl, 'L');
+  const cover = coverUrl(book.coverId, 'L');
 
   document.getElementById('book-detail-content').innerHTML = `
     <div class="book-detail-backdrop">
@@ -1087,7 +1076,7 @@ async function loadBookDetail(book) {
 
 function bindDetailActions(book) {
   document.getElementById('detail-read-btn')?.addEventListener('click', () => {
-    toggleRead(book.key, book.title, book.author, book.coverUrl, book.year);
+    toggleRead(book.key, book.title, book.author, book.coverId, book.year);
     const isRead = !!state.readBooks[book.key];
     const btn = document.getElementById('detail-read-btn');
     const statusEl = document.getElementById('detail-status');
@@ -1119,16 +1108,10 @@ function bindDetailActions(book) {
 
 async function fetchAndRenderDescription(key) {
   try {
-    // If the current book already has a description (from Google Books), use it directly
-    const existing = state.currentBook?.description;
-    let desc = existing || '';
-    if (!desc) {
-      const data = await fetchBookDetails(key);
-      if (typeof data.description === 'string') desc = data.description;
-      else if (data.description?.value) desc = data.description.value;
-      // Google Books API volumeInfo.description
-      else if (data.volumeInfo?.description) desc = data.volumeInfo.description;
-    }
+    const data = await fetchBookDetails(key);
+    let desc = '';
+    if (typeof data.description === 'string') desc = data.description;
+    else if (data.description?.value) desc = data.description.value;
     desc = desc.replace(/\([^)]*\)/g, '').replace(/https?:\/\/\S+/g, '').trim();
     const el = document.getElementById('detail-description');
     if (!el) return;
@@ -1202,7 +1185,7 @@ function renderBookGrid(containerId, books) {
 function bookCardHTML(book) {
   const isRead = !!state.readBooks[book.key];
   const rating = state.ratings[book.key] || 0;
-  const cover = coverUrl(book.coverUrl);
+  const cover = coverUrl(book.coverId);
   const starsHtml = [1,2,3,4,5].map(i => `<span class="star ${i <= rating ? 'filled' : ''}">★</span>`).join('');
   return `
     <div class="book-card" data-key="${escHtml(book.key)}">
@@ -1214,7 +1197,7 @@ function bookCardHTML(book) {
         </div>
         <div class="book-overlay">
           <div class="overlay-actions">
-            <button class="overlay-btn mark-read ${isRead ? 'read' : ''}" data-key="${escHtml(book.key)}" data-title="${escHtml(book.title)}" data-author="${escHtml(book.author)}" data-cover="${book.coverUrl || ''}" data-year="${book.year || ''}">${isRead ? '✓' : '📖'}</button>
+            <button class="overlay-btn mark-read ${isRead ? 'read' : ''}" data-key="${escHtml(book.key)}" data-title="${escHtml(book.title)}" data-author="${escHtml(book.author)}" data-cover="${book.coverId || ''}" data-year="${book.year || ''}">${isRead ? '✓' : '📖'}</button>
             <button class="overlay-btn rate-btn ${rating ? 'rated' : ''}" data-key="${escHtml(book.key)}">★</button>
           </div>
         </div>
@@ -1249,7 +1232,7 @@ function renderFavorites() {
   grid.innerHTML = [0,1,2,3].map(i => {
     const fav = state.favorites[i];
     if (fav) {
-      const cover = coverUrl(fav.coverUrl, 'M');
+      const cover = coverUrl(fav.coverId, 'M');
       return `
         <div class="fav-slot filled" data-slot="${i}">
           ${cover ? `<img src="${cover}" alt="${escHtml(fav.title)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">` : ''}
@@ -1285,7 +1268,7 @@ function renderReadList() {
   el.innerHTML = keys.map(key => {
     const b = state.readBooks[key];
     const rating = state.ratings[key] || 0;
-    const cover = coverUrl(b.coverUrl);
+    const cover = coverUrl(b.coverId);
     const starsHtml = [1,2,3,4,5].map(i => `<span class="star ${i <= rating ? 'filled' : ''}">★</span>`).join('');
     return `
       <div class="book-list-item" onclick="openBook(${JSON.stringify(b).replace(/"/g, '&quot;')})">
@@ -1301,13 +1284,13 @@ function renderReadList() {
 }
 
 // ─── ACTIONS ──────────────────────────────────────────────────────────────
-function toggleRead(key, title, author, coverUrl, year) {
+function toggleRead(key, title, author, coverId, year) {
   if (state.readBooks[key]) {
     delete state.readBooks[key];
     showToast(`Removed "${title}" from read list`);
   } else {
     const dateRead = new Date().toLocaleDateString('en-NL', { month: 'short', year: 'numeric' });
-    state.readBooks[key] = { key, title, author, coverUrl, year, dateRead };
+    state.readBooks[key] = { key, title, author, coverId, year, dateRead };
     showToast(`Marked "${title}" as read ✓`);
   }
   save();
@@ -1320,7 +1303,7 @@ function toggleFavorite(book) {
     showToast('Removed from favourites');
   } else {
     if (state.favorites.length >= 4) { showToast('You can only have 4 favourites. Remove one first.', 'error'); return; }
-    state.favorites.push({ key: book.key, title: book.title, author: book.author, coverUrl: book.coverUrl });
+    state.favorites.push({ key: book.key, title: book.title, author: book.author, coverId: book.coverId });
     showToast(`Added "${book.title}" to favourites ♥`);
   }
   save();
