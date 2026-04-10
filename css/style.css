@@ -14,9 +14,11 @@
   --border: #2c3440;
   --star-filled: #f4c542;
   --star-empty: #3a4555;
-  --shelf-wood: #2a1f14;
-  --shelf-wood-light: #3d2d1c;
-  --shelf-edge: #1a1208;
+  --shelf-wood: #382512;
+  --shelf-wood-light: #4b3013;
+  --shelf-wood-mid: #5a3918;
+  --shelf-wood-dark: #24170b;
+  --shelf-edge: #3f2709;
   --header-height: 56px;
 }
 
@@ -179,7 +181,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 20px 60px; }
 
 .shelf-track {
   display: flex;
-  gap: 0;
+  gap: 2px;
   overflow-x: auto;
   scroll-behavior: smooth;
   scrollbar-width: none;
@@ -193,6 +195,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 20px 60px; }
   flex: 0 0 auto;
   width: 110px;
   margin-right: 6px;
+  margin-bottom: 6px;
   cursor: pointer;
 }
 
@@ -214,36 +217,101 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 20px 60px; }
   box-shadow: -3px 0 6px rgba(0,0,0,0.4), 0 16px 32px rgba(0,0,0,0.6), inset -2px 0 4px rgba(0,0,0,0.2);
 }
 
-/* The wooden plank */
 .shelf-plank {
-  height: 18px;
-  background: linear-gradient(
-    to bottom,
-    var(--shelf-wood-light) 0%,
-    var(--shelf-wood) 40%,
-    var(--shelf-edge) 100%
-  );
-  border-radius: 2px;
-  box-shadow:
-    0 4px 12px rgba(0,0,0,0.6),
-    inset 0 1px 0 rgba(255,255,255,0.06),
-    inset 0 -1px 0 rgba(0,0,0,0.4);
   position: relative;
+  height: 18px;
+  border-radius: 2px;
+  overflow: hidden;
+
+  background:
+    /* subtle top sheen */
+    linear-gradient(
+      to bottom,
+      rgba(255,255,255,0.08) 0%,
+      rgba(255,255,255,0.02) 12%,
+      rgba(0,0,0,0) 30%
+    ),
+
+    /* soft uneven wood tone */
+    linear-gradient(
+      180deg,
+      var(--shelf-wood-light) 0%,
+      var(--shelf-wood-mid) 38%,
+      var(--shelf-wood) 68%,
+      var(--shelf-edge) 100%
+    ),
+
+    /* broad organic grain bands */
+    repeating-linear-gradient(
+      90deg,
+      rgba(255,255,255,0.03) 0px,
+      rgba(255,255,255,0.03) 18px,
+      rgba(0,0,0,0.04) 26px,
+      rgba(0,0,0,0.04) 52px,
+      rgba(255,255,255,0.02) 66px,
+      rgba(0,0,0,0.05) 92px,
+      rgba(255,255,255,0.015) 120px
+    );
+
+  box-shadow:
+    0 4px 12px rgba(0,0,0,0.55),
+    inset 0 1px 0 rgba(255,255,255,0.06),
+    inset 0 -1px 0 rgba(0,0,0,0.45);
 }
 
-/* wood grain texture via repeating gradient */
-.shelf-plank::after {
-  content: '';
+/* fine grain detail */
+.shelf-plank::before {
+  content: "";
   position: absolute;
   inset: 0;
-  border-radius: 2px;
-  background: repeating-linear-gradient(
-    90deg,
-    transparent 0px,
-    transparent 40px,
-    rgba(0,0,0,0.04) 40px,
-    rgba(0,0,0,0.04) 41px
-  );
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0.55;
+
+  background:
+    repeating-linear-gradient(
+      90deg,
+      rgba(0,0,0,0.035) 0px,
+      rgba(0,0,0,0.035) 1px,
+      transparent 1px,
+      transparent 7px,
+      rgba(255,255,255,0.018) 7px,
+      rgba(255,255,255,0.018) 8px,
+      transparent 8px,
+      transparent 16px
+    );
+
+  transform: scaleY(1.4);
+}
+
+/* irregular darker figure / knots */
+.shelf-plank::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0.35;
+
+  background:
+    radial-gradient(
+      ellipse at 22% 55%,
+      rgba(0,0,0,0.16) 0%,
+      rgba(0,0,0,0.08) 10%,
+      transparent 26%
+    ),
+    radial-gradient(
+      ellipse at 68% 35%,
+      rgba(255,255,255,0.05) 0%,
+      rgba(255,255,255,0.02) 8%,
+      transparent 22%
+    ),
+    radial-gradient(
+      ellipse at 82% 60%,
+      rgba(0,0,0,0.12) 0%,
+      rgba(0,0,0,0.05) 12%,
+      transparent 24%
+    );
 }
 
 /* shelf arrow buttons */
