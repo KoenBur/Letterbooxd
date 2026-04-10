@@ -2,15 +2,38 @@
 const SUPABASE_URL = 'https://ycejifwmvlpjewbsbrub.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljZWppZndtdmxwamV3YnNicnViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MjU4MDksImV4cCI6MjA5MTQwMTgwOX0.wCbsCkjSoSgEBniitnMVmhdiCnTxg94xnzD6K6VUUOA';
 
-// The UMD build may expose createClient at different paths
-let supabase = null;
+// The UMD build exposes window.supabase — find createClient
+let sb = null;
 try {
-  const sb = window.supabase;
-  const createFn = sb?.createClient || sb?.default?.createClient;
+  const _g = window.supabase || window.Supabase;
+  // Try every known path the UMD build might use
+  const createFn = _g?.createClient
+    || _g?.default?.createClient
+    || _g?.supabase?.createClient
+    || (typeof _g === 'function' ? _g : null);
   if (createFn) {
-    supabase = createFn(SUPABASE_URL, SUPABASE_ANON_KEY);
-  } else {
-    console.warn('Supabase library not found — running in offline mode');
+    sb = typeof createFn === 'function'
+      ? createFn(SUPABASE_URL, SUPABASE_ANON_KEY)
+      : null;
+  }
+  if (!sb) {
+    // Last resort: scan all keys on the global for createClient
+    if (_g && typeof _g === 'object') {
+      for (const key of Object.keys(_g)) {
+        if (typeof _g[key]?.createClient === 'function') {
+          sb = _g[key].createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+          break;
+        }
+        if (key === 'createClient' && typeof _g[key] === 'function') {
+          sb = _g[key](SUPABASE_URL, SUPABASE_ANON_KEY);
+          break;
+        }
+      }
+    }
+  }
+  if (!sb) {
+    console.warn('Supabase library loaded but createClient not found. Keys:', _g ? Object.keys(_g) : 'N/A');
+    console.warn('Running in offline mode.');
   }
 } catch (e) {
   console.warn('Supabase init failed:', e, '— running in offline mode');
@@ -36,7 +59,7 @@ const state = {
 
 // ─── AUTH ────────────────────────────────────────────────────────────────
 async function initAuth() {
-  if (!supabase) {
+  if (!sb) {
     // Offline mode — load from localStorage
     state.username = localStorage.getItem('lbx_username') || 'Reader';
     state.readBooks = JSON.parse(localStorage.getItem('lbx_read') || '{}');
@@ -46,7 +69,7 @@ async function initAuth() {
     return;
   }
 
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session } } = await sb.auth.getSession();
   if (session?.user) {
     state.user = session.user;
     await loadUserData();
@@ -60,7 +83,7 @@ async function initAuth() {
   updateAuthUI();
 
   // Listen for auth state changes (login, logout, token refresh)
-  supabase.auth.onAuthStateChange(async (event, session) => {
+  sb.auth.onAuthStateChange(async (event, session) => {
     const wasLoggedIn = !!state.user;
     state.user = session?.user || null;
     if (state.user && !wasLoggedIn) {
@@ -80,7 +103,7 @@ async function initAuth() {
 
 function updateAuthUI() {
   const loggedIn = !!state.user;
-  const hasSupabase = !!supabase;
+  const hasSupabase = !!sb;
   const loginBtn = document.getElementById('header-login-btn');
   const signupBtn = document.getElementById('header-signup-btn');
   const profileLink = document.getElementById('profile-nav-link');
@@ -107,8 +130,8 @@ function updateAuthUI() {
 }
 
 async function signUp(email, password, username) {
-  if (!supabase) throw new Error('Auth is not available. Please try again later.');
-  const { data, error } = await supabase.auth.signUp({
+  if (!sb) throw new Error('Auth is not available. Please try again later.');
+  const { data, error } = await sb.auth.signUp({
     email,
     password,
     options: {
@@ -125,14 +148,14 @@ async function signUp(email, password, username) {
 }
 
 async function logIn(email, password) {
-  if (!supabase) throw new Error('Auth is not available. Please try again later.');
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (!sb) throw new Error('Auth is not available. Please try again later.');
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
   if (error) throw error;
   return data;
 }
 
 async function logOut() {
-  if (supabase) await supabase.auth.signOut();
+  if (sb) await sb.auth.signOut();
   state.user = null;
   state.readBooks = {};
   state.ratings = {};
@@ -153,7 +176,7 @@ async function migrateLocalData(userId) {
 
     const readEntries = Object.values(oldRead).filter(b => b && b.key);
     if (readEntries.length) {
-      await supabase.from('read_books').upsert(
+      await sb.from('read_books').upsert(
         readEntries.map(b => ({
           user_id: userId, book_key: b.key, title: b.title,
           author: b.author, cover_url: b.coverUrl, year: b.year, date_read: b.dateRead,
@@ -164,7 +187,7 @@ async function migrateLocalData(userId) {
 
     const ratingEntries = Object.entries(oldRatings).filter(([k, v]) => v > 0);
     if (ratingEntries.length) {
-      await supabase.from('ratings').upsert(
+      await sb.from('ratings').upsert(
         ratingEntries.map(([key, rating]) => ({
           user_id: userId, book_key: key, rating,
         })),
@@ -173,7 +196,7 @@ async function migrateLocalData(userId) {
     }
 
     if (oldFavs.length) {
-      await supabase.from('favorites').upsert(
+      await sb.from('favorites').upsert(
         oldFavs.map((f, i) => ({
           user_id: userId, book_key: f.key, title: f.title,
           author: f.author, cover_url: f.coverUrl, position: i,
@@ -192,12 +215,12 @@ async function loadUserData() {
   const uid = state.user.id;
 
   // Load profile
-  const { data: profile } = await supabase
+  const { data: profile } = await sb
     .from('profiles').select('username').eq('id', uid).single();
   state.username = profile?.username || state.user.user_metadata?.username || 'Reader';
 
   // Load read books
-  const { data: reads } = await supabase
+  const { data: reads } = await sb
     .from('read_books').select('*').eq('user_id', uid);
   state.readBooks = {};
   (reads || []).forEach(r => {
@@ -208,13 +231,13 @@ async function loadUserData() {
   });
 
   // Load ratings
-  const { data: rats } = await supabase
+  const { data: rats } = await sb
     .from('ratings').select('*').eq('user_id', uid);
   state.ratings = {};
   (rats || []).forEach(r => { state.ratings[r.book_key] = r.rating; });
 
   // Load favorites
-  const { data: favs } = await supabase
+  const { data: favs } = await sb
     .from('favorites').select('*').eq('user_id', uid).order('position');
   state.favorites = (favs || []).map(f => ({
     key: f.book_key, title: f.title, author: f.author, coverUrl: f.cover_url,
@@ -236,7 +259,7 @@ async function save() {
 
 function requireAuth(actionName) {
   // If supabase isn't available, allow localStorage-based usage
-  if (!supabase) return true;
+  if (!sb) return true;
   if (state.user) return true;
   showToast(`Log in to ${actionName}`, 'info');
   openAuthModal('login');
@@ -1579,11 +1602,11 @@ function bindDetailActions(book) {
       state.ratings[book.key] = current === val ? 0 : val;
       if (state.user) {
         if (state.ratings[book.key] > 0) {
-          await supabase.from('ratings').upsert({
+          await sb.from('ratings').upsert({
             user_id: state.user.id, book_key: book.key, rating: state.ratings[book.key],
           }, { onConflict: 'user_id,book_key' });
         } else {
-          await supabase.from('ratings').delete()
+          await sb.from('ratings').delete()
             .eq('user_id', state.user.id).eq('book_key', book.key);
         }
       }
@@ -1727,7 +1750,7 @@ function bookCardHTML(book) {
 
 // ─── PROFILE ──────────────────────────────────────────────────────────────
 function loadProfilePage() {
-  if (supabase && !state.user) {
+  if (sb && !state.user) {
     openAuthModal('login');
     navigate('home');
     return;
@@ -1774,7 +1797,7 @@ async function removeFavorite(index) {
   const fav = state.favorites[index];
   state.favorites.splice(index, 1);
   if (state.user && fav) {
-    await supabase.from('favorites').delete()
+    await sb.from('favorites').delete()
       .eq('user_id', state.user.id).eq('book_key', fav.key);
   }
   save();
@@ -1815,7 +1838,7 @@ async function toggleRead(key, title, author, coverUrl, year) {
     delete state.readBooks[key];
     showToast(`Removed "${title}" from read list`);
     if (state.user) {
-      await supabase.from('read_books').delete()
+      await sb.from('read_books').delete()
         .eq('user_id', state.user.id).eq('book_key', key);
     }
   } else {
@@ -1823,7 +1846,7 @@ async function toggleRead(key, title, author, coverUrl, year) {
     state.readBooks[key] = { key, title, author, coverUrl, year, dateRead };
     showToast(`Marked "${title}" as read ✓`);
     if (state.user) {
-      await supabase.from('read_books').upsert({
+      await sb.from('read_books').upsert({
         user_id: state.user.id, book_key: key, title, author,
         cover_url: coverUrl, year, date_read: dateRead,
       }, { onConflict: 'user_id,book_key' });
@@ -1839,7 +1862,7 @@ async function toggleFavorite(book) {
     state.favorites.splice(idx, 1);
     showToast('Removed from favourites');
     if (state.user) {
-      await supabase.from('favorites').delete()
+      await sb.from('favorites').delete()
         .eq('user_id', state.user.id).eq('book_key', book.key);
     }
   } else {
@@ -1847,7 +1870,7 @@ async function toggleFavorite(book) {
     state.favorites.push({ key: book.key, title: book.title, author: book.author, coverUrl: book.coverUrl });
     showToast(`Added "${book.title}" to favourites ♥`);
     if (state.user) {
-      await supabase.from('favorites').upsert({
+      await sb.from('favorites').upsert({
         user_id: state.user.id, book_key: book.key, title: book.title,
         author: book.author, cover_url: book.coverUrl, position: state.favorites.length - 1,
       }, { onConflict: 'user_id,book_key' });
@@ -1881,11 +1904,11 @@ async function saveRating(val) {
   state.ratings[book.key] = (state.ratings[book.key] === val) ? 0 : val;
   if (state.user) {
     if (state.ratings[book.key] > 0) {
-      await supabase.from('ratings').upsert({
+      await sb.from('ratings').upsert({
         user_id: state.user.id, book_key: book.key, rating: state.ratings[book.key],
       }, { onConflict: 'user_id,book_key' });
     } else {
-      await supabase.from('ratings').delete()
+      await sb.from('ratings').delete()
         .eq('user_id', state.user.id).eq('book_key', book.key);
     }
   }
@@ -2088,7 +2111,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (val) {
       state.username = val;
       if (state.user) {
-        await supabase.from('profiles').update({ username: val }).eq('id', state.user.id);
+        await sb.from('profiles').update({ username: val }).eq('id', state.user.id);
       }
       save();
       document.getElementById('profile-username').textContent = val;
