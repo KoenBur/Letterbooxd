@@ -1,6 +1,7 @@
 // ─── SUPABASE ───────────────────────────────────────────────────────────
 const SUPABASE_URL = 'https://ycejifwmvlpjewbsbrub.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljZWppZndtdmxwamV3YnNicnViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MjU4MDksImV4cCI6MjA5MTQwMTgwOX0.wCbsCkjSoSgEBniitnMVmhdiCnTxg94xnzD6K6VUUOA';
+const GOOGLE_BOOKS_KEY = 'AIzaSyCPJ3cR_l7HRWz0lGA2G15sK4LS1fWhiWY';
 
 // The UMD build sets window.supabase with a createClient function
 let sb = null;
@@ -1219,7 +1220,7 @@ function filterAndRankGoogleBooks(items, { expectedTitle = '', expectedAuthor = 
 
 async function searchBooks(query, limit = 20) {
   const q = `${query} -journal -proceedings -textbook -handbook -manual`;
-  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=40&printType=books&langRestrict=en&orderBy=relevance`;
+  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=40&printType=books&langRestrict=en&orderBy=relevance`;
   const res = await fetch(url);
   const data = await res.json();
 
@@ -1276,7 +1277,7 @@ async function searchBooksForList(title, author) {
 
   // Fetch from Google Books
   const q = `intitle:"${title}" inauthor:"${author}" -journal -proceedings -textbook -handbook`;
-  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=10&printType=books&langRestrict=en&orderBy=relevance`;
+  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=10&printType=books&langRestrict=en&orderBy=relevance`;
   const res = await fetch(url);
 
   // If rate limited, return a placeholder instead of failing
@@ -1322,7 +1323,7 @@ async function searchBooksForList(title, author) {
 
 async function getPopularBooks(subject, limit = 16) {
   const q = `subject:${subject} -journal -proceedings -textbook -handbook`;
-  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=40&orderBy=relevance&printType=books&langRestrict=en`;
+  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=40&orderBy=relevance&printType=books&langRestrict=en`;
   const res = await fetch(url);
   const data = await res.json();
 
@@ -2129,7 +2130,7 @@ async function doGenreSearch(genre) {
   renderGridSkeletons('search-results-grid', 12);
   try {
     // Use subject: for genre browsing — returns much more relevant results
-    const url = `https://www.googleapis.com/books/v1/volumes?q=subject:${encodeURIComponent(genre)}&maxResults=24&orderBy=relevance&printType=books&langRestrict=en`;
+    const url = `https://www.googleapis.com/books/v1/volumes?q=subject:${encodeURIComponent(genre)}&key=${GOOGLE_BOOKS_KEY}&maxResults=24&orderBy=relevance&printType=books&langRestrict=en`;
     const res = await fetch(url);
     const data = await res.json();
     const results = (data.items || []).map(normalizeGoogleBook);
@@ -2462,7 +2463,7 @@ async function searchBooksForListCreation(query) {
   resultsEl.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:8px 0">Searching…</div>`;
   try {
     // Use a simpler query than searchBooks — no negative keywords, less aggressive filtering
-    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=8&printType=books&orderBy=relevance`;
+    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&key=${GOOGLE_BOOKS_KEY}&maxResults=8&printType=books&orderBy=relevance`;
     let res = await fetch(url);
     // Retry once after delay if rate limited
     if (res.status === 429) {
