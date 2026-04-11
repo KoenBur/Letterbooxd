@@ -1219,7 +1219,7 @@ function filterAndRankGoogleBooks(items, { expectedTitle = '', expectedAuthor = 
 }
 
 async function searchBooks(query, limit = 20) {
-  const q = `${query} -journal -proceedings -textbook -handbook -manual`;
+  const q = `${query}`;
   const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=40&printType=books&langRestrict=en&orderBy=relevance`;
   const res = await fetch(url);
   const data = await res.json();
@@ -1276,7 +1276,7 @@ async function searchBooksForList(title, author) {
   if (cached) return cached;
 
   // Fetch from Google Books
-  const q = `intitle:"${title}" inauthor:"${author}" -journal -proceedings -textbook -handbook`;
+  const q = `intitle:"${title}" inauthor:"${author}"`;
   const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=10&printType=books&langRestrict=en&orderBy=relevance`;
   const res = await fetch(url);
 
@@ -1322,7 +1322,7 @@ async function searchBooksForList(title, author) {
 }
 
 async function getPopularBooks(subject, limit = 16) {
-  const q = `subject:${subject} -journal -proceedings -textbook -handbook`;
+  const q = `subject:${subject}`;
   const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=40&orderBy=relevance&printType=books&langRestrict=en`;
   const res = await fetch(url);
   const data = await res.json();
