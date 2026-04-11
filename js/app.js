@@ -255,7 +255,7 @@ async function loadAllLists() {
     // Load all lists with their books in one query using a join
     const { data: lists, error } = await sb
       .from('lists')
-      .select('*, list_books(id, title, author, position, cover_url, book_key, year)')
+      .select('*, list_books(id, title, author, position)')
       .order('is_curated', { ascending: false })
       .order('created_at', { ascending: true });
     if (error) throw error;
@@ -266,10 +266,6 @@ async function loadAllLists() {
         .map(b => ({
           title: b.title,
           author: b.author,
-          coverUrl: b.cover_url || null,
-          bookKey: b.book_key || null,
-          year: b.year || '',
-          _dbId: b.id,
         }));
       listsCache[list.id] = {
         id: list.id,
@@ -295,18 +291,11 @@ async function loadListBooks(listId) {
   try {
     const { data, error } = await sb
       .from('list_books')
-      .select('id, title, author, position, cover_url, book_key, year')
+      .select('title, author, position')
       .eq('list_id', listId)
       .order('position');
     if (error) throw error;
-    const books = (data || []).map(b => ({
-      title: b.title,
-      author: b.author,
-      coverUrl: b.cover_url || null,
-      bookKey: b.book_key || null,
-      year: b.year || '',
-      _dbId: b.id, // keep the DB row id for updating cache
-    }));
+    const books = (data || []).map(b => ({ title: b.title, author: b.author }));
     if (listsCache[listId]) listsCache[listId].books = books;
     return books;
   } catch (e) {
@@ -1708,22 +1697,9 @@ async function loadListPreviewCovers() {
 
     const first5 = books.slice(0, 5);
     const results = await Promise.allSettled(
-      first5.map(async (b) => {
-        // Use cached cover if available
-        if (b.coverUrl) return { coverUrl: b.coverUrl, title: b.title };
-        // Otherwise fetch
-        const result = await searchBooksForList(b.title, b.author);
-        // Cache back to Supabase
-        if (result?.coverUrl && b._dbId && sb) {
-          sb.from('list_books')
-            .update({ cover_url: result.coverUrl, book_key: result.key, year: result.year || '' })
-            .eq('id', b._dbId)
-            .then(() => {})
-            .catch(() => {});
-          b.coverUrl = result.coverUrl;
-          b.bookKey = result.key;
-        }
-        return result;
+      first5.map(b => {
+        if (b.coverUrl) return Promise.resolve({ coverUrl: b.coverUrl, title: b.title });
+        return searchBooksForList(b.title, b.author);
       })
     );
 
@@ -1784,15 +1760,10 @@ async function loadListDetail(listId) {
       <div id="list-detail-books" class="list-tile-grid">
         ${list.books.map((b, i) => {
           const isRead = Object.values(state.readBooks).some(rb => rb.title.toLowerCase() === b.title.toLowerCase());
-          const hasCover = !!b.coverUrl;
           return `
           <div class="list-tile" data-idx="${i}" data-title="${escHtml(b.title)}" data-author="${escHtml(b.author)}">
             <div class="list-tile-cover" id="list-cover-${i}">
-              ${hasCover
-                ? `<img src="${b.coverUrl}" alt="${escHtml(b.title)}" class="list-tile-cover-img" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-                   <div class="list-tile-placeholder" style="display:none"><span class="list-tile-num">${i+1}</span></div>`
-                : `<div class="list-tile-placeholder"><span class="list-tile-num">${i+1}</span></div>`
-              }
+              <div class="list-tile-placeholder"><span class="list-tile-num">${i+1}</span></div>
             </div>
             <div class="list-tile-overlay">
               <button class="overlay-btn list-mark-read ${isRead ? 'read' : ''}" data-idx="${i}" title="Mark as read">${isRead ? '✓' : '📖'}</button>
@@ -1816,33 +1787,16 @@ async function loadListCovers(books, listId) {
   for (let i = 0; i < books.length; i += batchSize) {
     const batch = books.slice(i, i + batchSize);
     const results = await Promise.allSettled(
-      batch.map(async (b) => {
-        // If we already have a cached cover from Supabase, use it directly
+      batch.map(b => {
+        // If we already have a cached cover from Supabase list_books, build a result
         if (b.coverUrl && b.bookKey) {
-          return {
-            key: b.bookKey,
-            title: b.title,
-            author: b.author,
-            coverUrl: b.coverUrl,
-            year: b.year || '',
-            _cached: true,
-          };
+          return Promise.resolve({
+            key: b.bookKey, title: b.title, author: b.author,
+            coverUrl: b.coverUrl, year: b.year || '', _cached: true,
+          });
         }
-        // Otherwise fetch from Google Books
-        const result = await searchBooksForList(b.title, b.author);
-        // Cache the result back to Supabase for next time
-        if (result && result.coverUrl && b._dbId && sb) {
-          sb.from('list_books')
-            .update({ cover_url: result.coverUrl, book_key: result.key, year: result.year || '' })
-            .eq('id', b._dbId)
-            .then(() => {})
-            .catch(() => {});
-          // Also update local cache
-          b.coverUrl = result.coverUrl;
-          b.bookKey = result.key;
-          b.year = result.year;
-        }
-        return result;
+        // Otherwise go through searchBooksForList (which checks book_cover_cache → Google)
+        return searchBooksForList(b.title, b.author);
       })
     );
     results.forEach((r, j) => {
