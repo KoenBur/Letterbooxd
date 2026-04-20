@@ -33,6 +33,7 @@ const state = {
   fictionBooks: [],
   pendingRatingBook: null,
   isAdmin: false,
+  bio: '',
 };
 
 // ─── AUTH ────────────────────────────────────────────────────────────────
@@ -197,9 +198,10 @@ async function loadUserData() {
 
   // Load profile
   const { data: profile } = await sb
-    .from('profiles').select('username, is_admin').eq('id', uid).single();
+    .from('profiles').select('username, is_admin, bio').eq('id', uid).single();
   state.username = profile?.username || state.user.user_metadata?.username || 'Reader';
   state.isAdmin = !!profile?.is_admin;
+  state.bio = profile?.bio || '';
 
   // Load read books
   const { data: reads } = await sb
@@ -1431,6 +1433,7 @@ async function adminFindCoverOptions(title, author) {
 function navigate(page, params = {}) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
+  state._prevPage = state.currentPage;
   state.currentPage = page;
   window.scrollTo(0, 0);
 
@@ -1653,72 +1656,62 @@ function initShelfArrows() {
 let listsPageLoaded = false;
 
 async function loadListsPreviews() {
-  const container = document.getElementById('lists-dynamic-container');
-  if (!container) return;
+  const popularContainer = document.getElementById('lists-popular-container');
+  const newContainer = document.getElementById('lists-new-container');
+  const communityContainer = document.getElementById('lists-community-container');
+  const newSection = document.getElementById('lists-new-section');
+  const communitySection = document.getElementById('lists-community-section');
+  if (!popularContainer) return;
 
-  // Show loading state
   if (!listsPageLoaded) {
-    container.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">Loading lists…</div>`;
+    popularContainer.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">Loading lists…</div>`;
   }
 
-  // Load lists from Supabase
   await loadAllLists();
 
   const allLists = Object.values(listsCache);
   const curated = allLists.filter(l => l.is_curated);
   const userLists = allLists.filter(l => !l.is_curated);
 
-  let html = '';
+  // Popular lists = curated lists (they're the established ones)
+  popularContainer.innerHTML = curated.length
+    ? curated.map(l => listCardHTML(l, 'curated')).join('')
+    : (CURATED_LIST_IDS.map(id => {
+        const list = CURATED_LISTS_OFFLINE[id];
+        return list ? listCardHTML({ id, title: list.title, source: list.source, year: list.year, desc: list.desc, is_curated: true, books: list.books }, 'curated') : '';
+      }).join(''));
 
-  // Curated lists
-  for (const list of curated) {
-    html += listCardHTML(list, 'curated');
+  // Recently created = user lists sorted by newest first
+  const recentUserLists = [...userLists].sort((a, b) => (b.id > a.id ? 1 : -1)).slice(0, 6);
+  if (recentUserLists.length && newSection && newContainer) {
+    newSection.style.display = '';
+    newContainer.innerHTML = recentUserLists.map(l => listCardHTML(l, 'user')).join('');
   }
 
-  // User lists section
-  if (userLists.length) {
-    html += `<div class="lists-section-divider" style="grid-column:1/-1;border-top:1px solid var(--border);margin:12px 0 4px;padding-top:20px">
-      <h3 style="font-family:'Playfair Display',serif;font-size:18px;color:#fff;margin-bottom:12px">Community Lists</h3>
-    </div>`;
-    for (const list of userLists) {
-      html += listCardHTML(list, 'user');
-    }
+  // Community lists = all user lists
+  if (userLists.length && communitySection && communityContainer) {
+    communitySection.style.display = '';
+    communityContainer.innerHTML = userLists.map(l => listCardHTML(l, 'user')).join('');
   }
 
-  // Offline fallback if no Supabase lists loaded
-  if (!allLists.length) {
-    for (const id of CURATED_LIST_IDS) {
-      const list = CURATED_LISTS_OFFLINE[id];
-      if (list) {
-        html += listCardHTML({
-          id, title: list.title, source: list.source, year: list.year,
-          desc: list.desc, is_curated: true, books: list.books,
-        }, 'curated');
-      }
-    }
-  }
-
-  container.innerHTML = html;
-
-  // Bind click events
-  container.querySelectorAll('.list-card').forEach(card => {
-    card.addEventListener('click', () => openList(card.dataset.listId));
-  });
-
-  // Bind delete buttons
-  container.querySelectorAll('.list-delete-btn').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const listId = btn.dataset.listId;
-      if (!confirm('Delete this list?')) return;
-      await deleteUserList(listId);
-      showToast('List deleted');
-      listsPageLoaded = false;
-      loadListsPreviews();
+  // Bind click events on all containers
+  [popularContainer, newContainer, communityContainer].forEach(container => {
+    if (!container) return;
+    container.querySelectorAll('.list-card').forEach(card => {
+      card.addEventListener('click', () => openList(card.dataset.listId));
+    });
+    container.querySelectorAll('.list-delete-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm('Delete this list?')) return;
+        await deleteUserList(btn.dataset.listId);
+        showToast('List deleted');
+        listsPageLoaded = false;
+        loadListsPreviews();
+      });
     });
   });
 
-  // Load preview covers for each list
   loadListPreviewCovers();
   listsPageLoaded = true;
 }
@@ -1910,6 +1903,7 @@ async function loadBookDetail(book) {
 
   document.getElementById('book-detail-content').innerHTML = `
     <div class="book-detail-backdrop">
+      <div class="detail-back-bar"><button class="back-btn" id="book-back-btn">← Back</button></div>
       <div class="book-detail-inner">
         <div style="position:relative">
           ${cover ? `<img class="book-detail-cover" id="detail-cover-img" src="${cover}" alt="${escHtml(book.title)}" onerror="this.style.display='none';document.getElementById('detail-cover-placeholder').style.display='flex'">` : ''}
@@ -2025,6 +2019,12 @@ async function loadBookDetail(book) {
   bindAuthorLinks(book.author);
   bindAdminCoverActions(book);
   fetchAndRenderDescription(book.key);
+
+  // Back button — go to previous page or home
+  document.getElementById('book-back-btn')?.addEventListener('click', () => {
+    if (state._prevPage && state._prevPage !== 'book') navigate(state._prevPage);
+    else navigate('home');
+  });
 }
 
 function bindTabs() {
@@ -2388,10 +2388,61 @@ function loadProfilePage() {
   document.getElementById('stat-favs').textContent = favCount;
   document.getElementById('profile-username').textContent = state.username;
   document.getElementById('profile-avatar-letter').textContent = state.username[0].toUpperCase();
+  const bioEl = document.getElementById('profile-bio');
+  if (bioEl) bioEl.textContent = state.bio || '';
+  if (bioEl) bioEl.style.display = state.bio ? '' : 'none';
   const emailEl = document.getElementById('profile-email');
   if (emailEl) emailEl.textContent = state.user?.email || '';
   renderFavorites();
   renderReadList();
+  renderProfileLists();
+}
+
+async function renderProfileLists() {
+  const section = document.getElementById('profile-lists-section');
+  const grid = document.getElementById('profile-lists-grid');
+  if (!section || !grid || !state.user) return;
+
+  // Find user's lists from cache
+  await loadAllLists();
+  const myLists = Object.values(listsCache).filter(l => l.user_id === state.user.id);
+  if (!myLists.length) { section.style.display = 'none'; return; }
+
+  section.style.display = '';
+  grid.innerHTML = myLists.map(list => listCardHTML(list, 'user')).join('');
+
+  grid.querySelectorAll('.list-card').forEach(card => {
+    card.addEventListener('click', () => openList(card.dataset.listId));
+  });
+  grid.querySelectorAll('.list-delete-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm('Delete this list?')) return;
+      await deleteUserList(btn.dataset.listId);
+      showToast('List deleted');
+      listsPageLoaded = false;
+      renderProfileLists();
+    });
+  });
+
+  // Load preview covers
+  for (const list of myLists) {
+    const previewEl = document.getElementById(`${list.id}-preview`);
+    if (!previewEl || previewEl.dataset.loaded) continue;
+    previewEl.dataset.loaded = '1';
+    const first5 = (list.books || []).slice(0, 5);
+    const results = await Promise.allSettled(first5.map(b => b.coverUrl ? Promise.resolve({ coverUrl: b.coverUrl }) : searchBooksForList(b.title, b.author)));
+    const slots = previewEl.querySelectorAll('.list-placeholder-cover');
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled' && r.value?.coverUrl) {
+        const img = document.createElement('img');
+        img.src = coverUrl(r.value.coverUrl, 'S');
+        img.alt = first5[i]?.title || '';
+        img.style.cssText = 'flex:1;object-fit:cover;border-right:2px solid var(--bg-primary)';
+        slots[i]?.replaceWith(img);
+      }
+    });
+  }
 }
 
 function renderFavorites() {
@@ -2402,10 +2453,14 @@ function renderFavorites() {
     if (fav) {
       const cover = coverUrl(fav.coverUrl, 'M');
       return `
-        <div class="fav-slot filled" data-slot="${i}">
+        <div class="fav-slot filled" data-slot="${i}" data-fav-key="${escHtml(fav.key)}">
           ${cover ? `<img src="${cover}" alt="${escHtml(fav.title)}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">` : ''}
           <div class="fav-slot-placeholder" ${cover ? 'style="display:none"' : ''}><span>${escHtml(fav.title)}</span></div>
-          <div class="fav-slot-overlay"><button onclick="removeFavorite(${i})">Remove</button></div>
+          <div class="fav-slot-title">${escHtml(fav.title)}</div>
+          <div class="fav-slot-overlay">
+            <button class="fav-remove-btn" data-idx="${i}">Remove</button>
+            <button class="fav-open-btn" data-idx="${i}">View</button>
+          </div>
         </div>`;
     } else {
       return `<div class="fav-slot" data-slot="${i}" onclick="navigate('search')">
@@ -2416,6 +2471,27 @@ function renderFavorites() {
       </div>`;
     }
   }).join('');
+
+  // Bind favorite actions
+  grid.querySelectorAll('.fav-remove-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); removeFavorite(parseInt(btn.dataset.idx)); });
+  });
+  grid.querySelectorAll('.fav-open-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const fav = state.favorites[parseInt(btn.dataset.idx)];
+      if (fav) openBook(fav);
+    });
+  });
+  // Also make the whole card clickable (except overlay buttons)
+  grid.querySelectorAll('.fav-slot.filled').forEach(slot => {
+    slot.addEventListener('click', (e) => {
+      if (e.target.closest('.fav-remove-btn') || e.target.closest('.fav-open-btn')) return;
+      const idx = parseInt(slot.dataset.slot);
+      const fav = state.favorites[idx];
+      if (fav) openBook(fav);
+    });
+  });
 }
 
 async function removeFavorite(index) {
@@ -2845,22 +2921,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('edit-username-btn')?.addEventListener('click', () => {
     const form = document.getElementById('edit-name-form');
     const input = document.getElementById('username-input');
+    const bioInput = document.getElementById('bio-input');
     form.style.display = form.style.display === 'none' ? 'flex' : 'none';
     if (input) { input.value = state.username; input.focus(); }
+    if (bioInput) bioInput.value = state.bio || '';
   });
   document.getElementById('save-username-btn')?.addEventListener('click', async () => {
     const val = document.getElementById('username-input').value.trim();
+    const bioVal = document.getElementById('bio-input')?.value.trim() || '';
     if (val) {
       state.username = val;
+      state.bio = bioVal;
       if (state.user) {
-        await sb.from('profiles').update({ username: val }).eq('id', state.user.id);
+        await sb.from('profiles').update({ username: val, bio: bioVal }).eq('id', state.user.id);
       }
       save();
       document.getElementById('profile-username').textContent = val;
       document.getElementById('profile-avatar-letter').textContent = val[0].toUpperCase();
       document.getElementById('profile-avatar-small').textContent = val[0].toUpperCase();
+      const bioEl = document.getElementById('profile-bio');
+      if (bioEl) { bioEl.textContent = bioVal; bioEl.style.display = bioVal ? '' : 'none'; }
       document.getElementById('edit-name-form').style.display = 'none';
-      showToast('Username updated!');
+      showToast('Profile updated!');
     }
   });
 
