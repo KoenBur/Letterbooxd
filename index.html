@@ -108,9 +108,20 @@
     </div>
   </div>
   <main>
-    <div class="lists-grid" id="lists-dynamic-container">
-      <div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">Loading lists…</div>
-    </div>
+    <section id="lists-new-section" style="display:none">
+      <div class="section-header"><h2>Recently Created</h2></div>
+      <div class="lists-grid" id="lists-new-container"></div>
+    </section>
+    <section id="lists-popular-section">
+      <div class="section-header"><h2>Popular Lists</h2></div>
+      <div class="lists-grid" id="lists-popular-container">
+        <div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">Loading lists…</div>
+      </div>
+    </section>
+    <section id="lists-community-section" style="display:none">
+      <div class="section-header"><h2>Community Lists</h2></div>
+      <div class="lists-grid" id="lists-community-container"></div>
+    </section>
   </main>
 </div>
 
@@ -123,6 +134,7 @@
 <div class="page" id="page-search">
   <div class="search-hero">
     <div class="search-hero-inner">
+      <button class="back-btn" onclick="navigate('home')">← Back</button>
       <h2>Find a book</h2>
       <div class="search-bar">
         <input type="text" id="main-search-input" placeholder="Title, author, ISBN…" autocomplete="off">
@@ -160,6 +172,7 @@
       <div class="profile-big-avatar" id="profile-avatar-letter">R</div>
       <div>
         <div class="profile-name" id="profile-username">Reader</div>
+        <div class="profile-bio" id="profile-bio"></div>
         <div style="color:var(--text-muted);font-size:13px">Member · Letterbooxd</div>
         <div class="profile-stats">
           <div class="stat-item"><span class="stat-num" id="stat-read">0</span><span class="stat-label">Books</span></div>
@@ -172,6 +185,7 @@
         <button class="btn btn-secondary btn-sm" id="profile-logout-btn" style="color:var(--text-muted)">Log out</button>
         <div class="edit-profile-form" id="edit-name-form" style="display:none">
           <input type="text" id="username-input" placeholder="Your name" maxlength="30">
+          <textarea id="bio-input" placeholder="Short bio (optional)" maxlength="256" rows="2" style="resize:vertical;min-height:40px"></textarea>
           <button class="btn btn-primary btn-sm" id="save-username-btn">Save</button>
         </div>
         <div id="profile-email" style="font-size:12px;color:var(--text-muted);margin-top:4px"></div>
@@ -186,6 +200,10 @@
       </h3>
       <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Select up to four all-time favourites to show on your profile.</p>
       <div class="favorites-grid" id="favorites-grid"></div>
+    </section>
+    <section id="profile-lists-section" style="display:none">
+      <div class="section-header"><h2>My Lists</h2></div>
+      <div id="profile-lists-grid" class="lists-grid"></div>
     </section>
     <section>
       <div class="section-header"><h2>Read</h2></div>
