@@ -1,7 +1,7 @@
 // ─── SUPABASE ───────────────────────────────────────────────────────────
 const SUPABASE_URL = 'https://ycejifwmvlpjewbsbrub.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljZWppZndtdmxwamV3YnNicnViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MjU4MDksImV4cCI6MjA5MTQwMTgwOX0.wCbsCkjSoSgEBniitnMVmhdiCnTxg94xnzD6K6VUUOA';
-const GOOGLE_BOOKS_KEY = 'AIzaSyCPJ3cR_l7HRWz0lGA2G15sK4LS1fWhiWY';
+const GOOGLE_BOOKS_KEY = 'AIzaSyAvoDMvqoWWBHLchq5WaOKkGiYDhmz5Bjw';
 
 // The UMD build sets window.supabase with a createClient function
 let sb = null;
@@ -32,6 +32,7 @@ const state = {
   classicsBooks: [],
   fictionBooks: [],
   pendingRatingBook: null,
+  isAdmin: false,
 };
 
 // ─── AUTH ────────────────────────────────────────────────────────────────
@@ -191,10 +192,14 @@ async function loadUserData() {
   if (!state.user) return;
   const uid = state.user.id;
 
+  // Check admin status from profile
+  state.isAdmin = false;
+
   // Load profile
   const { data: profile } = await sb
-    .from('profiles').select('username').eq('id', uid).single();
+    .from('profiles').select('username, is_admin').eq('id', uid).single();
   state.username = profile?.username || state.user.user_metadata?.username || 'Reader';
+  state.isAdmin = !!profile?.is_admin;
 
   // Load read books
   const { data: reads } = await sb
@@ -1096,7 +1101,8 @@ function similarity(a = '', b = '') {
 
 function looksEnglishTitle(title = '') {
   if (!title) return false;
-  return /^[A-Za-z0-9\s'".,:;!?&()\-]+$/.test(title);
+  // Allow accented chars (é, ö, etc.) and common punctuation — many classic titles have these
+  return /^[\p{L}\p{N}\s'".,:;!?&()\-—–''""…]+$/u.test(title);
 }
 
 function isLikelyResearchOrNonTradeBook(info = {}) {
@@ -1208,12 +1214,55 @@ function filterAndRankGoogleBooks(items, { expectedTitle = '', expectedAuthor = 
 }
 
 async function searchBooks(query, limit = 20) {
-  const q = `${query}`;
-  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=40&printType=books&langRestrict=en&orderBy=relevance`;
-  const res = await fetch(url);
-  const data = await res.json();
+  const trimmed = query.trim();
+  if (!trimmed) return [];
 
-  const ranked = filterAndRankGoogleBooks(data.items || []);
+  // Strategy: try multiple query formulations and merge results
+  const allItems = [];
+  const seenIds = new Set();
+
+  // Helper to fetch and collect unique items
+  async function fetchQuery(q) {
+    try {
+      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=40&printType=books&langRestrict=en&orderBy=relevance`;
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const data = await res.json();
+      for (const item of (data.items || [])) {
+        if (!seenIds.has(item.id)) {
+          seenIds.add(item.id);
+          allItems.push(item);
+        }
+      }
+    } catch { /* skip failed query */ }
+  }
+
+  // Check if query looks like "title by author" or "author - title"
+  const byMatch = trimmed.match(/^(.+?)\s+by\s+(.+)$/i);
+  const dashMatch = trimmed.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+
+  if (byMatch) {
+    // "The Great Gatsby by Fitzgerald" → intitle + inauthor
+    await fetchQuery(`intitle:"${byMatch[1].trim()}" inauthor:"${byMatch[2].trim()}"`);
+    if (allItems.length < 3) await fetchQuery(trimmed);
+  } else if (dashMatch) {
+    // "Fitzgerald - The Great Gatsby"
+    await fetchQuery(`intitle:"${dashMatch[2].trim()}" inauthor:"${dashMatch[1].trim()}"`);
+    if (allItems.length < 3) await fetchQuery(trimmed);
+  } else {
+    // Standard search — try the raw query first
+    await fetchQuery(trimmed);
+
+    // If few results, also try as intitle
+    if (allItems.length < 5) {
+      await fetchQuery(`intitle:"${trimmed}"`);
+    }
+  }
+
+  const ranked = filterAndRankGoogleBooks(allItems, {
+    expectedTitle: byMatch ? byMatch[1].trim() : dashMatch ? dashMatch[2].trim() : trimmed,
+    expectedAuthor: byMatch ? byMatch[2].trim() : dashMatch ? dashMatch[1].trim() : '',
+  });
   return ranked.slice(0, limit).map(normalizeGoogleBook);
 }
 
@@ -1264,22 +1313,29 @@ async function searchBooksForList(title, author) {
   const cached = await getCachedCover(title, author);
   if (cached) return cached;
 
-  // Fetch from Google Books
-  const q = `intitle:"${title}" inauthor:"${author}"`;
-  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=10&printType=books&langRestrict=en&orderBy=relevance`;
-  const res = await fetch(url);
+  // Fetch from Google Books — try exact match first, then fallback
+  let ranked = [];
+  const queries = [
+    `intitle:"${title}" inauthor:"${author}"`,
+    `"${title}" "${author}"`,
+  ];
+  
+  for (const q of queries) {
+    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=10&printType=books&langRestrict=en&orderBy=relevance`;
+    const res = await fetch(url);
 
-  // If rate limited, return a placeholder instead of failing
-  if (res.status === 429) {
-    return { key: title, title, author, coverUrl: null, year: '' };
+    // If rate limited, return a placeholder instead of failing
+    if (res.status === 429) {
+      return { key: title, title, author, coverUrl: null, year: '' };
+    }
+
+    const data = await res.json();
+    ranked = filterAndRankGoogleBooks(data.items || [], {
+      expectedTitle: title,
+      expectedAuthor: author
+    });
+    if (ranked.length) break;
   }
-
-  const data = await res.json();
-
-  const ranked = filterAndRankGoogleBooks(data.items || [], {
-    expectedTitle: title,
-    expectedAuthor: author
-  });
 
   let book = ranked.length ? normalizeGoogleBook(ranked[0]) : null;
 
@@ -1365,6 +1421,39 @@ function coverUrl(idOrUrl, size = 'M') {
   if (idOrUrl.startsWith('http')) return idOrUrl;
   // Legacy Open Library ID fallback
   return `https://covers.openlibrary.org/b/id/${idOrUrl}-${size}.jpg`;
+}
+
+// ─── ADMIN: COVER MANAGEMENT ───────────────────────────────────────────
+async function adminUpdateCover(title, author, newCoverUrl, bookKey, year) {
+  if (!state.isAdmin) return;
+  // Update in-memory cache
+  const key = (title + '||' + author).toLowerCase();
+  coverMemCache[key] = { key: bookKey || title, title, author, coverUrl: newCoverUrl, year: year || '' };
+  // Update Supabase cache
+  if (sb) {
+    await sb.from('book_cover_cache').upsert({
+      title_lower: title.toLowerCase(),
+      author_lower: author.toLowerCase(),
+      cover_url: newCoverUrl,
+      book_key: bookKey || title,
+      year: year || '',
+    }, { onConflict: 'title_lower,author_lower' });
+  }
+}
+
+async function adminRegenerateCover(title, author) {
+  if (!state.isAdmin) return null;
+  // Delete from caches
+  const key = (title + '||' + author).toLowerCase();
+  delete coverMemCache[key];
+  if (sb) {
+    await sb.from('book_cover_cache').delete()
+      .eq('title_lower', title.toLowerCase())
+      .eq('author_lower', author.toLowerCase());
+  }
+  // Re-fetch from Google Books
+  const book = await searchBooksForList(title, author);
+  return book;
 }
 
 // ─── ROUTER ──────────────────────────────────────────────────────────────
@@ -1851,12 +1940,17 @@ async function loadBookDetail(book) {
   document.getElementById('book-detail-content').innerHTML = `
     <div class="book-detail-backdrop">
       <div class="book-detail-inner">
-        <div>
+        <div style="position:relative">
           ${cover ? `<img class="book-detail-cover" id="detail-cover-img" src="${cover}" alt="${escHtml(book.title)}" onerror="this.style.display='none';document.getElementById('detail-cover-placeholder').style.display='flex'">` : ''}
           <div class="book-detail-cover-placeholder" id="detail-cover-placeholder" ${cover ? 'style="display:none"' : ''}>
             <svg width="48" height="64" viewBox="0 0 24 32" fill="none"><rect x="0" y="0" width="24" height="32" rx="2" fill="#3a4555"/></svg>
             <p>${escHtml(book.title)}</p>
           </div>
+          ${state.isAdmin ? `
+          <div class="admin-cover-actions" id="admin-cover-actions">
+            <button class="btn btn-secondary btn-sm admin-btn" id="admin-regen-cover" title="Re-fetch cover from Google Books">⟳ Regenerate</button>
+            <button class="btn btn-secondary btn-sm admin-btn" id="admin-custom-cover" title="Set a custom cover URL">🖼 Custom URL</button>
+          </div>` : ''}
         </div>
         <div class="book-detail-info">
           ${book.year ? `<div class="book-detail-year">${book.year}</div>` : ''}
@@ -1957,6 +2051,7 @@ async function loadBookDetail(book) {
   bindDetailActions(book);
   bindTabs();
   bindAuthorLinks(book.author);
+  bindAdminCoverActions(book);
   fetchAndRenderDescription(book.key);
 }
 
@@ -2047,6 +2142,74 @@ function bindDetailActions(book) {
       showToast(state.ratings[book.key] ? `Rated "${book.title}" ${state.ratings[book.key]}★` : 'Rating removed', 'info');
     });
   });
+}
+
+// ─── ADMIN COVER ACTIONS ─────────────────────────────────────────────────
+function bindAdminCoverActions(book) {
+  if (!state.isAdmin) return;
+
+  document.getElementById('admin-regen-cover')?.addEventListener('click', async () => {
+    const btn = document.getElementById('admin-regen-cover');
+    btn.textContent = '⟳ Regenerating…';
+    btn.disabled = true;
+    try {
+      const updated = await adminRegenerateCover(book.title, book.author);
+      if (updated?.coverUrl) {
+        book.coverUrl = updated.coverUrl;
+        const img = document.getElementById('detail-cover-img');
+        const placeholder = document.getElementById('detail-cover-placeholder');
+        if (img) { img.src = updated.coverUrl; img.style.display = ''; }
+        if (placeholder) placeholder.style.display = 'none';
+        showToast('Cover regenerated!');
+      } else {
+        showToast('No better cover found', 'info');
+      }
+    } catch (e) {
+      showToast('Failed to regenerate: ' + e.message, 'error');
+    }
+    btn.textContent = '⟳ Regenerate';
+    btn.disabled = false;
+  });
+
+  document.getElementById('admin-custom-cover')?.addEventListener('click', () => {
+    const url = prompt('Enter custom cover image URL:');
+    if (!url) return;
+    if (!url.startsWith('http')) { showToast('Please enter a valid URL', 'error'); return; }
+    adminUpdateCover(book.title, book.author, url, book.key, book.year);
+    book.coverUrl = url;
+    const img = document.getElementById('detail-cover-img');
+    const placeholder = document.getElementById('detail-cover-placeholder');
+    if (img) { img.src = url; img.style.display = ''; }
+    else {
+      // Create new img element
+      const newImg = document.createElement('img');
+      newImg.className = 'book-detail-cover';
+      newImg.id = 'detail-cover-img';
+      newImg.src = url;
+      newImg.alt = book.title;
+      placeholder?.parentElement?.insertBefore(newImg, placeholder);
+    }
+    if (placeholder) placeholder.style.display = 'none';
+    showToast('Custom cover saved!');
+  });
+}
+
+async function fetchBookDetails(key) {
+  // Try Google Books API first
+  try {
+    const url = `https://www.googleapis.com/books/v1/volumes/${encodeURIComponent(key)}?key=${GOOGLE_BOOKS_KEY}`;
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = await res.json();
+      return data.volumeInfo || data;
+    }
+  } catch { /* fall through */ }
+  // Fallback to Open Library
+  try {
+    const res = await fetch(`${OL}/works/${key}.json`);
+    if (res.ok) return await res.json();
+  } catch { /* ignore */ }
+  return {};
 }
 
 async function fetchAndRenderDescription(key) {
