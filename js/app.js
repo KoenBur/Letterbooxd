@@ -1020,47 +1020,12 @@ function getListData(listId) {
   return listsCache[listId] || null;
 }
 
-// ─── GOOGLE BOOKS API ────────────────────────────────────────────────────
-// Uses Google Books for search & covers — no API key needed for basic use,
-// falls back to Open Library covers when Google has none.
+// ─── BOOK SEARCH & COVERS ───────────────────────────────────────────────
+// Primary: Open Library (free, no key, great for novels)
+// Covers: Open Library covers by ISBN/OLID → Wikipedia → Google Books fallback
 const OL = 'https://openlibrary.org';
 
-const NON_BOOK_CATEGORY_HINTS = [
-  'study aids',
-  'foreign language study',
-  'language arts',
-  'literary criticism',
-  'criticism',
-  'history',
-  'science',
-  'mathematics',
-  'medical',
-  'education',
-  'philosophy',
-  'psychology',
-  'reference',
-  'textbooks',
-  'business & economics',
-  'political science',
-  'social science',
-  'technology',
-  'computers'
-];
-
-const NON_BOOK_TITLE_HINTS = [
-  'paper',
-  'proceedings',
-  'journal',
-  'conference',
-  'review',
-  'handbook',
-  'guide',
-  'textbook',
-  'manual',
-  'workbook',
-  'anthology of criticism'
-];
-
+// ─── UTILITY ────────────────────────────────────────────────────────────
 function normalizeText(s = '') {
   return s
     .toLowerCase()
@@ -1070,211 +1035,126 @@ function normalizeText(s = '') {
     .trim();
 }
 
-function levenshtein(a = '', b = '') {
-  const aa = normalizeText(a);
-  const bb = normalizeText(b);
-  const dp = Array.from({ length: aa.length + 1 }, () => Array(bb.length + 1).fill(0));
-
-  for (let i = 0; i <= aa.length; i++) dp[i][0] = i;
-  for (let j = 0; j <= bb.length; j++) dp[0][j] = j;
-
-  for (let i = 1; i <= aa.length; i++) {
-    for (let j = 1; j <= bb.length; j++) {
-      const cost = aa[i - 1] === bb[j - 1] ? 0 : 1;
-      dp[i][j] = Math.min(
-        dp[i - 1][j] + 1,
-        dp[i][j - 1] + 1,
-        dp[i - 1][j - 1] + cost
-      );
-    }
-  }
-  return dp[aa.length][bb.length];
-}
-
 function similarity(a = '', b = '') {
   const aa = normalizeText(a);
   const bb = normalizeText(b);
   if (!aa && !bb) return 1;
-  const dist = levenshtein(aa, bb);
-  return 1 - dist / Math.max(aa.length, bb.length, 1);
+  if (aa === bb) return 1;
+  // Simple token overlap for speed
+  const tokA = new Set(aa.split(' '));
+  const tokB = new Set(bb.split(' '));
+  let overlap = 0;
+  for (const t of tokA) if (tokB.has(t)) overlap++;
+  return overlap / Math.max(tokA.size, tokB.size, 1);
 }
 
-function looksEnglishTitle(title = '') {
-  if (!title) return false;
-  // Allow accented chars (é, ö, etc.) and common punctuation — many classic titles have these
-  return /^[\p{L}\p{N}\s'".,:;!?&()\-—–''""…]+$/u.test(title);
-}
-
-function isLikelyResearchOrNonTradeBook(info = {}) {
-  const title = normalizeText(info.title || '');
-  const categories = (info.categories || []).map(normalizeText);
-  const publisher = normalizeText(info.publisher || '');
-
-  if (NON_BOOK_TITLE_HINTS.some(h => title.includes(h))) return true;
-  if (categories.some(c => NON_BOOK_CATEGORY_HINTS.some(h => c.includes(h)))) return true;
-  if (publisher.includes('springer') || publisher.includes('wiley') || publisher.includes('crc press')) return true;
-
-  if ((info.pageCount || 0) > 1200) return true;
-
-  return false;
-}
-
-function getBestGoogleCover(info = {}) {
-  if (!info.imageLinks) return null;
-
-  const base =
-    info.imageLinks.extraLarge ||
-    info.imageLinks.large ||
-    info.imageLinks.medium ||
-    info.imageLinks.small ||
-    info.imageLinks.thumbnail ||
-    info.imageLinks.smallThumbnail ||
-    '';
-
-  if (!base) return null;
-
-  return base
-    .replace('http://', 'https://')
-    .replace('&edge=curl', '')
-    .replace(/zoom=\d+/g, 'zoom=3');
-}
-
-function buildBookScore(item, expectedTitle = '', expectedAuthor = '') {
-  const info = item.volumeInfo || {};
-  let score = 0;
-
-  if (info.language === 'en') score += 40;
-  if (looksEnglishTitle(info.title)) score += 25;
-  if (info.printType === 'BOOK') score += 15;
-  if (info.imageLinks?.extraLarge) score += 20;
-  else if (info.imageLinks?.large) score += 16;
-  else if (info.imageLinks?.medium) score += 12;
-  else if (info.imageLinks?.thumbnail) score += 6;
-
-  if (expectedTitle) {
-    const titleSim = similarity(info.title || '', expectedTitle);
-    score += Math.round(titleSim * 40);
-
-    if (normalizeText(info.title) === normalizeText(expectedTitle)) score += 20;
-  }
-
-  if (expectedAuthor && info.authors?.length) {
-    const bestAuthorSim = Math.max(
-      ...info.authors.map(a => similarity(a, expectedAuthor)),
-      0
-    );
-    score += Math.round(bestAuthorSim * 25);
-  }
-
-  if (info.averageRating) score += Math.min(10, Math.round(info.averageRating));
-  if (info.ratingsCount) score += Math.min(10, Math.floor(info.ratingsCount / 100));
-
-  if (isLikelyResearchOrNonTradeBook(info)) score -= 80;
-  if (info.language && info.language !== 'en') score -= 100;
-  if (!looksEnglishTitle(info.title)) score -= 50;
-
-  return score;
-}
-
-function normalizeGoogleBook(item) {
-  const info = item.volumeInfo || {};
-
+// ─── OPEN LIBRARY SEARCH ────────────────────────────────────────────────
+function normalizeOLBook(doc) {
+  const coverId = doc.cover_i || null;
+  const coverUrl = coverId ? `https://covers.openlibrary.org/b/id/${coverId}-L.jpg` : null;
   return {
-    key: item.id,
-    title: info.title || 'Unknown Title',
-    author: info.authors?.[0] || 'Unknown Author',
-    coverUrl: getBestGoogleCover(info),
-    year: info.publishedDate?.substring(0, 4) || '',
-    pages: info.pageCount || null,
-    description: info.description || '',
-    categories: info.categories || [],
-    language: info.language || '',
-    averageRating: info.averageRating || null,
-    ratingsCount: info.ratingsCount || 0,
-    publisher: info.publisher || '',
+    key: doc.key?.replace('/works/', '') || doc.edition_key?.[0] || doc.title,
+    title: doc.title || 'Unknown Title',
+    author: doc.author_name?.[0] || 'Unknown Author',
+    coverUrl,
+    year: doc.first_publish_year?.toString() || '',
+    pages: doc.number_of_pages_median || null,
+    description: '',
+    categories: doc.subject?.slice(0, 5) || [],
+    language: doc.language?.[0] || 'eng',
+    isbn: doc.isbn?.[0] || null,
+    olKey: doc.key || null,
   };
-}
-
-function filterAndRankGoogleBooks(items, { expectedTitle = '', expectedAuthor = '' } = {}) {
-  return (items || [])
-    .filter(item => {
-      const info = item.volumeInfo || {};
-      if (info.printType && info.printType !== 'BOOK') return false;
-      if (info.language && info.language !== 'en') return false;
-      if (!info.title) return false;
-      if (!looksEnglishTitle(info.title)) return false;
-      if (isLikelyResearchOrNonTradeBook(info)) return false;
-      return true;
-    })
-    .sort((a, b) => {
-      const aScore = buildBookScore(a, expectedTitle, expectedAuthor);
-      const bScore = buildBookScore(b, expectedTitle, expectedAuthor);
-      return bScore - aScore;
-    });
 }
 
 async function searchBooks(query, limit = 20) {
   const trimmed = query.trim();
   if (!trimmed) return [];
+  const seenTitles = new Set();
+  let results = [];
 
-  // Strategy: try multiple query formulations and merge results
-  const allItems = [];
-  const seenIds = new Set();
+  // Parse "title by author" patterns
+  const byMatch = trimmed.match(/^(.+?)\s+by\s+(.+)$/i);
 
-  // Helper to fetch and collect unique items
-  async function fetchQuery(q) {
-    try {
-      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=40&printType=books&langRestrict=en&orderBy=relevance`;
-      const res = await fetch(url);
-      if (!res.ok) return;
+  try {
+    // Build Open Library search URL
+    let olUrl;
+    if (byMatch) {
+      olUrl = `${OL}/search.json?title=${encodeURIComponent(byMatch[1].trim())}&author=${encodeURIComponent(byMatch[2].trim())}&limit=${limit}&language=eng`;
+    } else {
+      olUrl = `${OL}/search.json?q=${encodeURIComponent(trimmed)}&limit=${limit * 2}&language=eng`;
+    }
+    const res = await fetch(olUrl);
+    if (res.ok) {
       const data = await res.json();
-      for (const item of (data.items || [])) {
-        if (!seenIds.has(item.id)) {
-          seenIds.add(item.id);
-          allItems.push(item);
+      for (const doc of (data.docs || [])) {
+        if (!doc.title) continue;
+        // Deduplicate by normalized title
+        const normTitle = normalizeText(doc.title);
+        if (seenTitles.has(normTitle)) continue;
+        seenTitles.add(normTitle);
+        results.push(normalizeOLBook(doc));
+      }
+    }
+  } catch (e) { console.warn('OL search failed:', e); }
+
+  // If Open Library gave few results, try Google Books as fallback
+  if (results.length < 5) {
+    try {
+      const gResults = await searchBooksGoogle(trimmed, limit);
+      for (const book of gResults) {
+        const normTitle = normalizeText(book.title);
+        if (!seenTitles.has(normTitle)) {
+          seenTitles.add(normTitle);
+          results.push(book);
         }
       }
-    } catch { /* skip failed query */ }
+    } catch { /* ignore */ }
   }
 
-  // Check if query looks like "title by author" or "author - title"
-  const byMatch = trimmed.match(/^(.+?)\s+by\s+(.+)$/i);
-  const dashMatch = trimmed.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+  return results.slice(0, limit);
+}
 
-  if (byMatch) {
-    // "The Great Gatsby by Fitzgerald" → intitle + inauthor
-    await fetchQuery(`intitle:"${byMatch[1].trim()}" inauthor:"${byMatch[2].trim()}"`);
-    if (allItems.length < 3) await fetchQuery(trimmed);
-  } else if (dashMatch) {
-    // "Fitzgerald - The Great Gatsby"
-    await fetchQuery(`intitle:"${dashMatch[2].trim()}" inauthor:"${dashMatch[1].trim()}"`);
-    if (allItems.length < 3) await fetchQuery(trimmed);
-  } else {
-    // Standard search — try the raw query first
-    await fetchQuery(trimmed);
-
-    // If few results, also try as intitle
-    if (allItems.length < 5) {
-      await fetchQuery(`intitle:"${trimmed}"`);
-    }
-  }
-
-  const ranked = filterAndRankGoogleBooks(allItems, {
-    expectedTitle: byMatch ? byMatch[1].trim() : dashMatch ? dashMatch[2].trim() : trimmed,
-    expectedAuthor: byMatch ? byMatch[2].trim() : dashMatch ? dashMatch[1].trim() : '',
-  });
-  return ranked.slice(0, limit).map(normalizeGoogleBook);
+// Google Books fallback search
+async function searchBooksGoogle(query, limit = 20) {
+  try {
+    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&key=${GOOGLE_BOOKS_KEY}&maxResults=20&printType=books&langRestrict=en&orderBy=relevance`;
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.items || [])
+      .filter(item => {
+        const info = item.volumeInfo || {};
+        if (info.printType && info.printType !== 'BOOK') return false;
+        if (info.language && info.language !== 'en') return false;
+        return !!info.title;
+      })
+      .slice(0, limit)
+      .map(item => {
+        const info = item.volumeInfo || {};
+        const base = info.imageLinks?.large || info.imageLinks?.medium || info.imageLinks?.thumbnail || '';
+        const coverUrl = base ? base.replace('http://', 'https://').replace('&edge=curl', '').replace(/zoom=\d+/g, 'zoom=3') : null;
+        return {
+          key: item.id,
+          title: info.title || 'Unknown Title',
+          author: info.authors?.[0] || 'Unknown Author',
+          coverUrl,
+          year: info.publishedDate?.substring(0, 4) || '',
+          pages: info.pageCount || null,
+          description: info.description || '',
+          categories: info.categories || [],
+          language: info.language || '',
+        };
+      });
+  } catch { return []; }
 }
 
 // ─── COVER CACHE ─────────────────────────────────────────────────────────
-// In-memory cache to avoid even hitting Supabase repeatedly in one session
 const coverMemCache = {};
 
 async function getCachedCover(title, author) {
   const key = (title + '||' + author).toLowerCase();
-  // 1. Check in-memory cache
   if (coverMemCache[key]) return coverMemCache[key];
-  // 2. Check Supabase cache
   if (!sb) return null;
   try {
     const { data } = await sb
@@ -1308,56 +1188,80 @@ async function saveCoverToCache(title, author, coverUrl, bookKey, year) {
   } catch (e) { /* ignore cache write failure */ }
 }
 
+// ─── COVER LOOKUP: OL → Wikipedia → Google ──────────────────────────────
 async function searchBooksForList(title, author) {
   // Check cache first
   const cached = await getCachedCover(title, author);
   if (cached) return cached;
 
-  // Fetch from Google Books — try exact match first, then fallback
-  let ranked = [];
-  const queries = [
-    `intitle:"${title}" inauthor:"${author}"`,
-    `"${title}" "${author}"`,
-  ];
-  
-  for (const q of queries) {
-    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=10&printType=books&langRestrict=en&orderBy=relevance`;
-    const res = await fetch(url);
+  let book = null;
 
-    // If rate limited, return a placeholder instead of failing
-    if (res.status === 429) {
-      return { key: title, title, author, coverUrl: null, year: '' };
+  // 1. Try Open Library search
+  try {
+    const olUrl = `${OL}/search.json?title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}&limit=3&language=eng`;
+    const res = await fetch(olUrl);
+    if (res.ok) {
+      const data = await res.json();
+      // Find best match
+      for (const doc of (data.docs || [])) {
+        if (!doc.title) continue;
+        const titleSim = similarity(doc.title, title);
+        if (titleSim > 0.4 || normalizeText(doc.title).includes(normalizeText(title))) {
+          book = normalizeOLBook(doc);
+          break;
+        }
+      }
     }
+  } catch { /* ignore */ }
 
-    const data = await res.json();
-    ranked = filterAndRankGoogleBooks(data.items || [], {
-      expectedTitle: title,
-      expectedAuthor: author
-    });
-    if (ranked.length) break;
+  // 2. If no cover from OL, try Wikipedia
+  if (!book?.coverUrl) {
+    const wikiCover = await getWikipediaCover(title, author);
+    if (wikiCover) {
+      if (book) {
+        book.coverUrl = wikiCover;
+      } else {
+        book = { key: title, title, author, coverUrl: wikiCover, year: '' };
+      }
+    }
   }
 
-  let book = ranked.length ? normalizeGoogleBook(ranked[0]) : null;
+  // 3. Last resort: Google Books
+  if (!book?.coverUrl) {
+    try {
+      const q = `intitle:"${title}" inauthor:"${author}"`;
+      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=5&printType=books&langRestrict=en`;
+      const res = await fetch(url);
+      if (res.ok && res.status !== 429) {
+        const data = await res.json();
+        const item = (data.items || [])[0];
+        if (item) {
+          const info = item.volumeInfo || {};
+          const base = info.imageLinks?.large || info.imageLinks?.medium || info.imageLinks?.thumbnail || '';
+          const gCover = base ? base.replace('http://', 'https://').replace('&edge=curl', '').replace(/zoom=\d+/g, 'zoom=3') : null;
+          if (gCover) {
+            if (book) {
+              book.coverUrl = gCover;
+              if (!book.year) book.year = info.publishedDate?.substring(0, 4) || '';
+            } else {
+              book = {
+                key: item.id, title, author, coverUrl: gCover,
+                year: info.publishedDate?.substring(0, 4) || '',
+                pages: info.pageCount || null,
+                description: info.description || '', categories: info.categories || [],
+              };
+            }
+          }
+        }
+      }
+    } catch { /* ignore */ }
+  }
 
+  // Fallback: no cover found anywhere
   if (!book) {
-    book = {
-      key: title,
-      title,
-      author,
-      coverUrl: null,
-      year: '',
-      pages: null,
-      description: '',
-      categories: [],
-      language: 'en'
-    };
+    book = { key: title, title, author, coverUrl: null, year: '' };
   }
 
-  if (!book.coverUrl) {
-    book.coverUrl = await getWikipediaCover(title, author);
-  }
-
-  // Don't fall back to openlibrary title URL — it almost never works and generates 404s
   // Save to cache for future loads
   if (book.coverUrl) {
     saveCoverToCache(title, author, book.coverUrl, book.key, book.year);
@@ -1367,13 +1271,22 @@ async function searchBooksForList(title, author) {
 }
 
 async function getPopularBooks(subject, limit = 16) {
-  const q = `subject:${subject}`;
-  const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=40&orderBy=relevance&printType=books&langRestrict=en`;
-  const res = await fetch(url);
-  const data = await res.json();
-
-  const ranked = filterAndRankGoogleBooks(data.items || []);
-  return ranked.slice(0, limit).map(normalizeGoogleBook);
+  // Use Open Library subjects API
+  try {
+    const url = `${OL}/subjects/${encodeURIComponent(subject.toLowerCase())}.json?limit=${limit}`;
+    const res = await fetch(url);
+    if (res.ok) {
+      const data = await res.json();
+      return (data.works || []).map(w => ({
+        key: w.key?.replace('/works/', '') || w.title,
+        title: w.title || 'Unknown',
+        author: w.authors?.[0]?.name || 'Unknown Author',
+        coverUrl: w.cover_id ? `https://covers.openlibrary.org/b/id/${w.cover_id}-L.jpg` : null,
+        year: w.first_publish_year?.toString() || '',
+      }));
+    }
+  } catch { /* fall through */ }
+  return [];
 }
 
 async function getCuratedShelf(titles) {
@@ -1382,44 +1295,49 @@ async function getCuratedShelf(titles) {
       try {
         return await searchBooksForList(title, author);
       } catch {
-        return {
-          key: title,
-          title,
-          author,
-          coverUrl: null,
-          year: '',
-          pages: null,
-          description: '',
-          categories: [],
-          language: 'en'
-        };
+        return { key: title, title, author, coverUrl: null, year: '' };
       }
     })
   );
-
-  return results
-    .filter(r => r.status === 'fulfilled' && r.value)
-    .map(r => r.value);
+  return results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
 }
 
-// Wikipedia cover fallback — fetches the book's main image from its Wikipedia article
+// Wikipedia cover — searches for the book article and grabs the page image
 async function getWikipediaCover(title, author) {
   try {
-    const search = `${title} novel`;
-    const url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(search)}&prop=pageimages&format=json&pithumbsize=400&origin=*`;
-    const res = await fetch(url);
-    const data = await res.json();
-    const pages = Object.values(data.query?.pages || {});
+    // Step 1: Search Wikipedia for the article
+    const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(title + ' ' + author + ' novel')}&srlimit=3&format=json&origin=*`;
+    const searchRes = await fetch(searchUrl);
+    const searchData = await searchRes.json();
+    const articles = searchData.query?.search || [];
+
+    // Find the best matching article
+    let bestTitle = null;
+    for (const article of articles) {
+      const normArticle = normalizeText(article.title);
+      const normTarget = normalizeText(title);
+      if (normArticle.includes(normTarget) || normTarget.includes(normArticle) || similarity(article.title, title) > 0.5) {
+        bestTitle = article.title;
+        break;
+      }
+    }
+    // Fallback: just use first result
+    if (!bestTitle && articles.length) bestTitle = articles[0].title;
+    if (!bestTitle) return null;
+
+    // Step 2: Get the page image
+    const imgUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(bestTitle)}&prop=pageimages&format=json&pithumbsize=500&origin=*`;
+    const imgRes = await fetch(imgUrl);
+    const imgData = await imgRes.json();
+    const pages = Object.values(imgData.query?.pages || {});
     const img = pages[0]?.thumbnail?.source;
     return img || null;
   } catch { return null; }
 }
 
 function coverUrl(idOrUrl, size = 'M') {
-  // For Google Books we store the full URL directly
   if (!idOrUrl) return null;
   if (idOrUrl.startsWith('http')) return idOrUrl;
-  // Legacy Open Library ID fallback
   return `https://covers.openlibrary.org/b/id/${idOrUrl}-${size}.jpg`;
 }
 
@@ -2246,11 +2164,30 @@ async function doGenreSearch(genre) {
   document.getElementById('search-results-info').textContent = 'Searching…';
   renderGridSkeletons('search-results-grid', 12);
   try {
-    // Use subject: for genre browsing — returns much more relevant results
-    const url = `https://www.googleapis.com/books/v1/volumes?q=subject:${encodeURIComponent(genre)}&key=${GOOGLE_BOOKS_KEY}&maxResults=24&orderBy=relevance&printType=books&langRestrict=en`;
+    // Use Open Library subjects API for genre browsing
+    const subject = genre.toLowerCase().replace(/\s+/g, '_');
+    const url = `${OL}/subjects/${encodeURIComponent(subject)}.json?limit=24`;
     const res = await fetch(url);
-    const data = await res.json();
-    const results = (data.items || []).map(normalizeGoogleBook);
+    let results = [];
+    if (res.ok) {
+      const data = await res.json();
+      results = (data.works || []).map(w => ({
+        key: w.key?.replace('/works/', '') || w.title,
+        title: w.title || 'Unknown',
+        author: w.authors?.[0]?.name || 'Unknown Author',
+        coverUrl: w.cover_id ? `https://covers.openlibrary.org/b/id/${w.cover_id}-L.jpg` : null,
+        year: w.first_publish_year?.toString() || '',
+        pages: null, description: '', categories: [genre],
+      }));
+    }
+    // Fallback to general search if subjects returned little
+    if (results.length < 5) {
+      const fallback = await searchBooks(genre, 24);
+      const seenTitles = new Set(results.map(r => normalizeText(r.title)));
+      for (const b of fallback) {
+        if (!seenTitles.has(normalizeText(b.title))) results.push(b);
+      }
+    }
     state.searchResults = results;
     state.searchQuery = genre;
     document.getElementById('search-results-info').textContent = `${results.length} results for "${genre}"`;
@@ -2579,21 +2516,15 @@ async function searchBooksForListCreation(query) {
   if (!query.trim()) { resultsEl.innerHTML = ''; return; }
   resultsEl.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:8px 0">Searching…</div>`;
   try {
-    // Use a simpler query than searchBooks — no negative keywords, less aggressive filtering
-    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&key=${GOOGLE_BOOKS_KEY}&maxResults=8&printType=books&orderBy=relevance`;
-    let res = await fetch(url);
-    // Retry once after delay if rate limited
-    if (res.status === 429) {
-      resultsEl.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:8px 0">Rate limited, retrying…</div>`;
-      await new Promise(r => setTimeout(r, 2000));
-      res = await fetch(url);
-    }
-    if (!res.ok) throw new Error('API returned ' + res.status);
+    // Use Open Library for list creation search
+    const olUrl = `${OL}/search.json?q=${encodeURIComponent(query)}&limit=8&language=eng`;
+    const res = await fetch(olUrl);
+    if (!res.ok) throw new Error('Search failed');
     const data = await res.json();
-    const results = (data.items || [])
-      .filter(item => item.volumeInfo?.title)
+    const results = (data.docs || [])
+      .filter(doc => doc.title)
       .slice(0, 8)
-      .map(normalizeGoogleBook);
+      .map(normalizeOLBook);
     if (!results.length) {
       resultsEl.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:8px 0">No results found.</div>`;
       return;
@@ -2609,7 +2540,6 @@ async function searchBooksForListCreation(query) {
       item.addEventListener('click', () => {
         const title = item.dataset.title;
         const author = item.dataset.author;
-        // Don't add duplicates
         if (createListBooks.some(b => b.title === title && b.author === author)) {
           showToast('Already in list', 'info');
           return;
@@ -2617,7 +2547,6 @@ async function searchBooksForListCreation(query) {
         createListBooks.push({ title, author });
         renderCreateListBooks();
         showToast(`Added "${title}"`);
-        // Clear search
         document.getElementById('create-list-search').value = '';
         resultsEl.innerHTML = '';
       });
