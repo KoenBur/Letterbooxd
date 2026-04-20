@@ -1429,6 +1429,157 @@ async function adminFindCoverOptions(title, author) {
   return options;
 }
 
+// ─── FRIENDS SYSTEM ──────────────────────────────────────────────────────
+async function searchUsers(query) {
+  if (!sb || !query.trim()) return [];
+  try {
+    const { data } = await sb.from('profiles').select('id, username, bio')
+      .ilike('username', `%${query}%`).limit(8);
+    return (data || []).filter(u => u.id !== state.user?.id);
+  } catch { return []; }
+}
+
+async function getFriends() {
+  if (!sb || !state.user) return [];
+  try {
+    const { data } = await sb.from('friendships').select('friend_id, profiles!friendships_friend_id_fkey(id, username, bio)')
+      .eq('user_id', state.user.id);
+    return (data || []).map(f => f.profiles).filter(Boolean);
+  } catch { return []; }
+}
+
+async function addFriend(friendId) {
+  if (!sb || !state.user) return;
+  await sb.from('friendships').upsert({ user_id: state.user.id, friend_id: friendId }, { onConflict: 'user_id,friend_id' });
+}
+
+async function removeFriend(friendId) {
+  if (!sb || !state.user) return;
+  await sb.from('friendships').delete().eq('user_id', state.user.id).eq('friend_id', friendId);
+}
+
+async function getFriendActivity(friendId) {
+  if (!sb) return [];
+  try {
+    const { data } = await sb.from('reviews').select('book_key, book_title, rating, created_at')
+      .eq('user_id', friendId).order('created_at', { ascending: false }).limit(2);
+    return data || [];
+  } catch { return []; }
+}
+
+async function loadFriendsSidebar() {
+  if (!state.user) return;
+  const friendsList = document.getElementById('friends-list');
+  const friendsCount = document.getElementById('friends-count');
+  if (!friendsList) return;
+
+  const friends = await getFriends();
+  if (friendsCount) friendsCount.textContent = friends.length ? `(${friends.length})` : '';
+
+  if (!friends.length) {
+    friendsList.innerHTML = '<p style="color:var(--text-muted);font-size:13px;font-style:italic">No friends yet. Search above to add some!</p>';
+    return;
+  }
+
+  let html = '';
+  for (const friend of friends) {
+    const activity = await getFriendActivity(friend.id);
+    html += `
+      <div class="friend-item">
+        <div class="friend-info">
+          <div class="friend-avatar">${(friend.username || '?')[0].toUpperCase()}</div>
+          <div>
+            <div class="friend-name">${escHtml(friend.username || 'User')}</div>
+            ${activity.length ? `<div class="friend-activity">${activity.map(a =>
+              `<span class="friend-activity-item">Reviewed "${escHtml(a.book_title)}" ${'★'.repeat(a.rating || 0)}</span>`
+            ).join('')}</div>` : '<div class="friend-activity"><span class="friend-activity-item">No recent activity</span></div>'}
+          </div>
+        </div>
+        <button class="friend-remove-btn" data-friend-id="${friend.id}" title="Remove friend">✕</button>
+      </div>`;
+  }
+  friendsList.innerHTML = html;
+
+  friendsList.querySelectorAll('.friend-remove-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await removeFriend(btn.dataset.friendId);
+      showToast('Friend removed');
+      loadFriendsSidebar();
+    });
+  });
+}
+
+function bindFriendSearch() {
+  const input = document.getElementById('friend-search-input');
+  const resultsEl = document.getElementById('friend-search-results');
+  if (!input || !resultsEl) return;
+
+  let debounce;
+  input.addEventListener('input', () => {
+    clearTimeout(debounce);
+    const q = input.value.trim();
+    if (!q) { resultsEl.innerHTML = ''; resultsEl.style.display = 'none'; return; }
+    debounce = setTimeout(async () => {
+      const users = await searchUsers(q);
+      const friends = await getFriends();
+      const friendIds = new Set(friends.map(f => f.id));
+      if (!users.length) { resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">No users found</div>'; resultsEl.style.display = ''; return; }
+      resultsEl.innerHTML = users.map(u => `
+        <div class="friend-search-item" data-user-id="${u.id}">
+          <div class="friend-avatar" style="width:28px;height:28px;font-size:12px">${(u.username || '?')[0].toUpperCase()}</div>
+          <span>${escHtml(u.username)}</span>
+          ${friendIds.has(u.id) ? '<span style="color:var(--accent-green);font-size:12px">✓ Friends</span>' : `<button class="btn btn-primary btn-sm add-friend-btn" data-user-id="${u.id}" style="margin-left:auto;padding:2px 10px;font-size:11px">Add</button>`}
+        </div>
+      `).join('');
+      resultsEl.style.display = '';
+      resultsEl.querySelectorAll('.add-friend-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          await addFriend(btn.dataset.userId);
+          showToast('Friend added!');
+          input.value = '';
+          resultsEl.innerHTML = '';
+          resultsEl.style.display = 'none';
+          loadFriendsSidebar();
+        });
+      });
+    }, 300);
+  });
+}
+
+// ─── REVIEWS SYSTEM ─────────────────────────────────────────────────────
+async function getBookReviews(bookKey) {
+  if (!sb) return [];
+  try {
+    const { data } = await sb.from('reviews')
+      .select('id, user_id, book_key, book_title, rating, review_text, created_at, profiles!reviews_user_id_fkey(username)')
+      .eq('book_key', bookKey)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    return (data || []).map(r => ({
+      ...r,
+      username: r.profiles?.username || 'Anonymous',
+    }));
+  } catch { return []; }
+}
+
+async function submitReview(bookKey, bookTitle, rating, reviewText) {
+  if (!sb || !state.user) throw new Error('Must be logged in');
+  const { error } = await sb.from('reviews').upsert({
+    user_id: state.user.id,
+    book_key: bookKey,
+    book_title: bookTitle,
+    rating: rating || null,
+    review_text: reviewText,
+  }, { onConflict: 'user_id,book_key' });
+  if (error) throw error;
+}
+
+async function deleteReview(reviewId) {
+  if (!sb) return;
+  await sb.from('reviews').delete().eq('id', reviewId);
+}
+
 // ─── ROUTER ──────────────────────────────────────────────────────────────
 function navigate(page, params = {}) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -1658,9 +1809,8 @@ let listsPageLoaded = false;
 async function loadListsPreviews() {
   const popularContainer = document.getElementById('lists-popular-container');
   const newContainer = document.getElementById('lists-new-container');
-  const communityContainer = document.getElementById('lists-community-container');
+  const recsContainer = document.getElementById('lists-recs-container');
   const newSection = document.getElementById('lists-new-section');
-  const communitySection = document.getElementById('lists-community-section');
   if (!popularContainer) return;
 
   if (!listsPageLoaded) {
@@ -1673,29 +1823,32 @@ async function loadListsPreviews() {
   const curated = allLists.filter(l => l.is_curated);
   const userLists = allLists.filter(l => !l.is_curated);
 
-  // Popular lists = curated lists (they're the established ones)
-  popularContainer.innerHTML = curated.length
-    ? curated.map(l => listCardHTML(l, 'curated')).join('')
-    : (CURATED_LIST_IDS.map(id => {
-        const list = CURATED_LISTS_OFFLINE[id];
-        return list ? listCardHTML({ id, title: list.title, source: list.source, year: list.year, desc: list.desc, is_curated: true, books: list.books }, 'curated') : '';
-      }).join(''));
-
-  // Recently created = user lists sorted by newest first
-  const recentUserLists = [...userLists].sort((a, b) => (b.id > a.id ? 1 : -1)).slice(0, 6);
-  if (recentUserLists.length && newSection && newContainer) {
-    newSection.style.display = '';
-    newContainer.innerHTML = recentUserLists.map(l => listCardHTML(l, 'user')).join('');
+  // Popular lists = user lists sorted by book count (proxy for popularity) + curated
+  const popular = [...userLists].sort((a, b) => (b.books?.length || 0) - (a.books?.length || 0)).slice(0, 6);
+  if (popular.length) {
+    popularContainer.innerHTML = popular.map(l => listCardHTML(l, 'user')).join('');
+  } else {
+    popularContainer.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">No lists yet. Create the first one!</div>';
   }
 
-  // Community lists = all user lists
-  if (userLists.length && communitySection && communityContainer) {
-    communitySection.style.display = '';
-    communityContainer.innerHTML = userLists.map(l => listCardHTML(l, 'user')).join('');
+  // Recently created = newest user lists
+  const recent = [...userLists].sort((a, b) => (b.id > a.id ? 1 : -1)).slice(0, 6);
+  if (recent.length && newSection && newContainer) {
+    newSection.style.display = '';
+    newContainer.innerHTML = recent.map(l => listCardHTML(l, 'user')).join('');
+  }
+
+  // Letterbooxd Recommendations = curated lists
+  if (recsContainer) {
+    const recsData = curated.length ? curated : CURATED_LIST_IDS.map(id => {
+      const list = CURATED_LISTS_OFFLINE[id];
+      return list ? { id, title: list.title, source: list.source, year: list.year, desc: list.desc, is_curated: true, books: list.books } : null;
+    }).filter(Boolean);
+    recsContainer.innerHTML = recsData.map(l => listCardHTML(l, 'curated')).join('');
   }
 
   // Bind click events on all containers
-  [popularContainer, newContainer, communityContainer].forEach(container => {
+  [popularContainer, newContainer, recsContainer].forEach(container => {
     if (!container) return;
     container.querySelectorAll('.list-card').forEach(card => {
       card.addEventListener('click', () => openList(card.dataset.listId));
@@ -1953,42 +2106,21 @@ async function loadBookDetail(book) {
       <div class="tab-content" id="tab-overview">
         <div class="reviews-section">
           <h3 class="reviews-heading">Reviews</h3>
-          <div class="review-list">
-            <div class="review-item">
-              <div class="review-header">
-                <div class="review-avatar">A</div>
-                <div class="review-meta">
-                  <div class="review-name">Alice M.</div>
-                  <div class="review-stars">${'★'.repeat(5)}</div>
-                </div>
-                <div class="review-date">Mar 2025</div>
+          ${state.user ? `
+          <div class="write-review-form" id="write-review-form">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+              <div class="review-avatar">${state.username[0].toUpperCase()}</div>
+              <span style="font-size:13px;color:var(--text-secondary)">Write a review</span>
+              <div class="review-form-stars" id="review-form-stars">
+                ${[1,2,3,4,5].map(i => `<span class="review-form-star" data-val="${i}">☆</span>`).join('')}
               </div>
-              <p class="review-text">An absolutely wonderful read. The prose is captivating and the story stays with you long after you've finished the last page. Highly recommended for anyone who appreciates great literature.</p>
             </div>
-            <div class="review-item">
-              <div class="review-header">
-                <div class="review-avatar">J</div>
-                <div class="review-meta">
-                  <div class="review-name">James K.</div>
-                  <div class="review-stars">${'★'.repeat(4)}${'☆'.repeat(1)}</div>
-                </div>
-                <div class="review-date">Feb 2025</div>
-              </div>
-              <p class="review-text">Really enjoyed this one. The characters are well-developed and the pacing kept me engaged throughout. Lost a star because the ending felt a bit rushed, but overall a great experience.</p>
-            </div>
-            <div class="review-item">
-              <div class="review-header">
-                <div class="review-avatar">S</div>
-                <div class="review-meta">
-                  <div class="review-name">Sarah L.</div>
-                  <div class="review-stars">${'★'.repeat(4)}${'☆'.repeat(1)}</div>
-                </div>
-                <div class="review-date">Jan 2025</div>
-              </div>
-              <p class="review-text">A thought-provoking book that challenges your perspective. Some parts were slow but the payoff was worth it. Would love to discuss this in a book club setting.</p>
-            </div>
+            <textarea id="review-text-input" placeholder="What did you think of this book?" maxlength="1000" rows="3"></textarea>
+            <button class="btn btn-primary btn-sm" id="submit-review-btn" style="margin-top:8px">Post Review</button>
+          </div>` : '<p style="color:var(--text-muted);font-size:13px;margin-bottom:12px">Log in to write a review.</p>'}
+          <div class="review-list" id="review-list">
+            <p style="color:var(--text-muted);font-style:italic;font-size:13px">Loading reviews…</p>
           </div>
-          <p style="color:var(--text-muted);font-size:13px;margin-top:16px;font-style:italic">Review functionality coming soon — these are placeholder reviews.</p>
         </div>
       </div>
       <div class="tab-content" id="tab-details" style="display:none">
@@ -2019,8 +2151,9 @@ async function loadBookDetail(book) {
   bindAuthorLinks(book.author);
   bindAdminCoverActions(book);
   fetchAndRenderDescription(book.key);
+  loadAndRenderReviews(book);
+  bindReviewForm(book);
 
-  // Back button — go to previous page or home
   document.getElementById('book-back-btn')?.addEventListener('click', () => {
     if (state._prevPage && state._prevPage !== 'book') navigate(state._prevPage);
     else navigate('home');
@@ -2202,6 +2335,76 @@ function bindAdminCoverActions(book) {
     }
     if (placeholder) placeholder.style.display = 'none';
     showToast('Custom cover saved!');
+  });
+}
+
+// ─── REVIEW RENDERING ────────────────────────────────────────────────────
+async function loadAndRenderReviews(book) {
+  const container = document.getElementById('review-list');
+  if (!container) return;
+  const reviews = await getBookReviews(book.key);
+  if (!reviews.length) {
+    container.innerHTML = '<p style="color:var(--text-muted);font-style:italic;font-size:13px">No reviews yet. Be the first to share your thoughts!</p>';
+    return;
+  }
+  container.innerHTML = reviews.map(r => {
+    const date = new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+    const stars = r.rating ? '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating) : '';
+    const isOwn = state.user && r.user_id === state.user.id;
+    return `
+      <div class="review-item">
+        <div class="review-header">
+          <div class="review-avatar">${(r.username || '?')[0].toUpperCase()}</div>
+          <div class="review-meta">
+            <div class="review-name">${escHtml(r.username)}</div>
+            ${stars ? `<div class="review-stars">${stars}</div>` : ''}
+          </div>
+          <div class="review-date">${date}</div>
+          ${isOwn || state.isAdmin ? `<button class="review-delete-btn" data-review-id="${r.id}" title="Delete">✕</button>` : ''}
+        </div>
+        ${r.review_text ? `<p class="review-text">${escHtml(r.review_text)}</p>` : ''}
+      </div>`;
+  }).join('');
+
+  container.querySelectorAll('.review-delete-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await deleteReview(btn.dataset.reviewId);
+      showToast('Review deleted');
+      loadAndRenderReviews(book);
+    });
+  });
+}
+
+function bindReviewForm(book) {
+  let reviewRating = 0;
+  const stars = document.querySelectorAll('.review-form-star');
+  stars.forEach(star => {
+    star.addEventListener('click', () => {
+      const val = parseInt(star.dataset.val);
+      reviewRating = reviewRating === val ? 0 : val;
+      stars.forEach((s, i) => s.textContent = i < reviewRating ? '★' : '☆');
+    });
+    star.addEventListener('mouseenter', () => {
+      const val = parseInt(star.dataset.val);
+      stars.forEach((s, i) => s.classList.toggle('hover-fill', i < val));
+    });
+    star.addEventListener('mouseleave', () => stars.forEach(s => s.classList.remove('hover-fill')));
+  });
+
+  document.getElementById('submit-review-btn')?.addEventListener('click', async () => {
+    const text = document.getElementById('review-text-input')?.value.trim() || '';
+    if (!text && !reviewRating) { showToast('Write something or add a rating', 'info'); return; }
+    const btn = document.getElementById('submit-review-btn');
+    btn.disabled = true; btn.textContent = 'Posting…';
+    try {
+      await submitReview(book.key, book.title, reviewRating, text);
+      showToast('Review posted!');
+      document.getElementById('review-text-input').value = '';
+      reviewRating = 0;
+      stars.forEach(s => s.textContent = '☆');
+      loadAndRenderReviews(book);
+    } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+    btn.disabled = false; btn.textContent = 'Post Review';
   });
 }
 
@@ -2396,6 +2599,8 @@ function loadProfilePage() {
   renderFavorites();
   renderReadList();
   renderProfileLists();
+  loadFriendsSidebar();
+  bindFriendSearch();
 }
 
 async function renderProfileLists() {
@@ -2796,7 +3001,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Nav
   document.querySelectorAll('nav a[data-page]').forEach(a => {
-    a.addEventListener('click', e => { e.preventDefault(); navigate(a.dataset.page); });
+    a.addEventListener('click', e => {
+      e.preventDefault();
+      navigate(a.dataset.page);
+      document.getElementById('main-nav')?.classList.remove('open');
+    });
+  });
+
+  // Mobile menu
+  document.getElementById('mobile-menu-btn')?.addEventListener('click', () => {
+    document.getElementById('main-nav')?.classList.toggle('open');
   });
 
   document.getElementById('logo-link')?.addEventListener('click', e => { e.preventDefault(); navigate('home'); });
