@@ -1024,6 +1024,31 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 20px 60px; }
   font-family: 'Playfair Display', serif;
 }
 
+/* ─── ADMIN COVER CONTROLS ───────────────────────────────── */
+.admin-cover-actions {
+  position: absolute;
+  bottom: 8px;
+  left: 4px;
+  right: 4px;
+  display: flex;
+  gap: 4px;
+  z-index: 5;
+}
+.admin-btn {
+  font-size: 11px !important;
+  padding: 4px 8px !important;
+  background: rgba(20, 24, 28, 0.9) !important;
+  border-color: var(--accent-orange) !important;
+  color: var(--accent-orange) !important;
+  backdrop-filter: blur(4px);
+  flex: 1;
+  text-align: center;
+}
+.admin-btn:hover {
+  background: var(--accent-orange) !important;
+  color: var(--bg-primary) !important;
+}
+
 /* ─── SCROLLBAR ──────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 8px; }
 ::-webkit-scrollbar-track { background: var(--bg-primary); }
