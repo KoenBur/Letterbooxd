@@ -1359,19 +1359,72 @@ async function adminUpdateCover(title, author, newCoverUrl, bookKey, year) {
   }
 }
 
-async function adminRegenerateCover(title, author) {
-  if (!state.isAdmin) return null;
-  // Delete from caches
-  const key = (title + '||' + author).toLowerCase();
-  delete coverMemCache[key];
-  if (sb) {
-    await sb.from('book_cover_cache').delete()
-      .eq('title_lower', title.toLowerCase())
-      .eq('author_lower', author.toLowerCase());
+async function adminFindCoverOptions(title, author) {
+  if (!state.isAdmin) return [];
+  const options = [];
+  const seen = new Set();
+
+  function addOption(url, source) {
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    options.push({ url, source });
   }
-  // Re-fetch from Google Books
-  const book = await searchBooksForList(title, author);
-  return book;
+
+  // Fetch all sources in parallel
+  const [olResults, wikiCover, googleResults] = await Promise.allSettled([
+    // 1. Open Library — search for multiple editions to get different covers
+    (async () => {
+      const res = await fetch(`${OL}/search.json?title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}&limit=10&language=eng`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      const covers = [];
+      for (const doc of (data.docs || [])) {
+        if (doc.cover_i) {
+          const sim = similarity(doc.title || '', title);
+          if (sim > 0.3 || normalizeText(doc.title || '').includes(normalizeText(title))) {
+            covers.push({
+              url: `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`,
+              source: `Open Library${doc.edition_count > 1 ? ` (${doc.first_publish_year || ''})` : ''}`,
+            });
+          }
+        }
+      }
+      return covers;
+    })(),
+    // 2. Wikipedia
+    getWikipediaCover(title, author),
+    // 3. Google Books — multiple results
+    (async () => {
+      const q = `intitle:"${title}" inauthor:"${author}"`;
+      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=8&printType=books&langRestrict=en`;
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      const data = await res.json();
+      const covers = [];
+      for (const item of (data.items || [])) {
+        const info = item.volumeInfo || {};
+        const base = info.imageLinks?.large || info.imageLinks?.medium || info.imageLinks?.thumbnail || '';
+        if (base) {
+          const coverUrl = base.replace('http://', 'https://').replace('&edge=curl', '').replace(/zoom=\d+/g, 'zoom=3');
+          covers.push({ url: coverUrl, source: `Google Books (${info.publishedDate?.substring(0, 4) || '?'})` });
+        }
+      }
+      return covers;
+    })(),
+  ]);
+
+  // Collect results
+  if (olResults.status === 'fulfilled') {
+    for (const c of olResults.value) addOption(c.url, c.source);
+  }
+  if (wikiCover.status === 'fulfilled' && wikiCover.value) {
+    addOption(wikiCover.value, 'Wikipedia');
+  }
+  if (googleResults.status === 'fulfilled') {
+    for (const c of googleResults.value) addOption(c.url, c.source);
+  }
+
+  return options;
 }
 
 // ─── ROUTER ──────────────────────────────────────────────────────────────
@@ -1866,9 +1919,10 @@ async function loadBookDetail(book) {
           </div>
           ${state.isAdmin ? `
           <div class="admin-cover-actions" id="admin-cover-actions">
-            <button class="btn btn-secondary btn-sm admin-btn" id="admin-regen-cover" title="Re-fetch cover from Google Books">⟳ Regenerate</button>
-            <button class="btn btn-secondary btn-sm admin-btn" id="admin-custom-cover" title="Set a custom cover URL">🖼 Custom URL</button>
-          </div>` : ''}
+            <button class="btn btn-secondary btn-sm admin-btn" id="admin-find-covers" title="Find cover options from multiple sources">🔍 Find covers</button>
+            <button class="btn btn-secondary btn-sm admin-btn" id="admin-custom-cover" title="Set a custom cover URL">🖼 Paste URL</button>
+          </div>
+          <div class="admin-cover-picker" id="admin-cover-picker" style="display:none"></div>` : ''}
         </div>
         <div class="book-detail-info">
           ${book.year ? `<div class="book-detail-year">${book.year}</div>` : ''}
@@ -2066,31 +2120,71 @@ function bindDetailActions(book) {
 function bindAdminCoverActions(book) {
   if (!state.isAdmin) return;
 
-  document.getElementById('admin-regen-cover')?.addEventListener('click', async () => {
-    const btn = document.getElementById('admin-regen-cover');
-    btn.textContent = '⟳ Regenerating…';
+  document.getElementById('admin-find-covers')?.addEventListener('click', async () => {
+    const btn = document.getElementById('admin-find-covers');
+    const picker = document.getElementById('admin-cover-picker');
+    if (!picker) return;
+
+    // Toggle off if already open
+    if (picker.style.display !== 'none') {
+      picker.style.display = 'none';
+      return;
+    }
+
+    btn.textContent = '🔍 Searching…';
     btn.disabled = true;
+    picker.style.display = 'block';
+    picker.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:8px">Searching Open Library, Wikipedia & Google Books…</p>';
+
     try {
-      const updated = await adminRegenerateCover(book.title, book.author);
-      if (updated?.coverUrl) {
-        book.coverUrl = updated.coverUrl;
-        const img = document.getElementById('detail-cover-img');
-        const placeholder = document.getElementById('detail-cover-placeholder');
-        if (img) { img.src = updated.coverUrl; img.style.display = ''; }
-        if (placeholder) placeholder.style.display = 'none';
-        showToast('Cover regenerated!');
+      const options = await adminFindCoverOptions(book.title, book.author);
+      if (!options.length) {
+        picker.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:8px">No covers found. Try pasting a URL instead.</p>';
       } else {
-        showToast('No better cover found', 'info');
+        picker.innerHTML = `
+          <p style="color:var(--text-muted);font-size:12px;margin-bottom:8px">Click a cover to use it:</p>
+          <div class="cover-options-grid">
+            ${options.map((opt, i) => `
+              <div class="cover-option" data-idx="${i}">
+                <img src="${escHtml(opt.url)}" alt="Cover option ${i + 1}" onerror="this.parentElement.style.display='none'">
+                <span class="cover-option-source">${escHtml(opt.source)}</span>
+              </div>
+            `).join('')}
+          </div>
+        `;
+        picker.querySelectorAll('.cover-option').forEach(el => {
+          el.addEventListener('click', () => {
+            const idx = parseInt(el.dataset.idx);
+            const chosen = options[idx];
+            if (!chosen) return;
+            adminUpdateCover(book.title, book.author, chosen.url, book.key, book.year);
+            book.coverUrl = chosen.url;
+            const img = document.getElementById('detail-cover-img');
+            const placeholder = document.getElementById('detail-cover-placeholder');
+            if (img) { img.src = chosen.url; img.style.display = ''; }
+            else {
+              const newImg = document.createElement('img');
+              newImg.className = 'book-detail-cover';
+              newImg.id = 'detail-cover-img';
+              newImg.src = chosen.url;
+              newImg.alt = book.title;
+              placeholder?.parentElement?.insertBefore(newImg, placeholder);
+            }
+            if (placeholder) placeholder.style.display = 'none';
+            picker.style.display = 'none';
+            showToast(`Cover updated from ${chosen.source}!`);
+          });
+        });
       }
     } catch (e) {
-      showToast('Failed to regenerate: ' + e.message, 'error');
+      picker.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:8px">Failed to search. Try again.</p>';
     }
-    btn.textContent = '⟳ Regenerate';
+    btn.textContent = '🔍 Find covers';
     btn.disabled = false;
   });
 
   document.getElementById('admin-custom-cover')?.addEventListener('click', () => {
-    const url = prompt('Enter custom cover image URL:');
+    const url = prompt('Paste a cover image URL:');
     if (!url) return;
     if (!url.startsWith('http')) { showToast('Please enter a valid URL', 'error'); return; }
     adminUpdateCover(book.title, book.author, url, book.key, book.year);
@@ -2099,7 +2193,6 @@ function bindAdminCoverActions(book) {
     const placeholder = document.getElementById('detail-cover-placeholder');
     if (img) { img.src = url; img.style.display = ''; }
     else {
-      // Create new img element
       const newImg = document.createElement('img');
       newImg.className = 'book-detail-cover';
       newImg.id = 'detail-cover-img';
