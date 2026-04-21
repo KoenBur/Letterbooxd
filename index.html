@@ -179,6 +179,7 @@
           <div class="stat-item"><span class="stat-num" id="stat-read">0</span><span class="stat-label">Books</span></div>
           <div class="stat-item"><span class="stat-num" id="stat-rated">0</span><span class="stat-label">Rated</span></div>
           <div class="stat-item"><span class="stat-num" id="stat-favs">0</span><span class="stat-label">Favs</span></div>
+          <div class="stat-item"><span class="stat-num" id="stat-wishlist">0</span><span class="stat-label">Wishlist</span></div>
         </div>
       </div>
       <div style="margin-left:auto;display:flex;flex-direction:column;gap:8px;align-items:flex-end">
@@ -187,6 +188,7 @@
         <div class="edit-profile-form" id="edit-name-form" style="display:none">
           <input type="text" id="username-input" placeholder="Your name" maxlength="30">
           <textarea id="bio-input" placeholder="Short bio (optional)" maxlength="256" rows="2" style="resize:vertical;min-height:40px"></textarea>
+          <input type="url" id="avatar-url-input" placeholder="Profile picture URL (optional)" maxlength="500" style="width:100%">
           <button class="btn btn-primary btn-sm" id="save-username-btn">Save</button>
         </div>
         <div id="profile-email" style="font-size:12px;color:var(--text-muted);margin-top:4px"></div>
@@ -223,7 +225,31 @@
           <p style="color:var(--text-muted);font-size:13px;font-style:italic">No friends yet. Search above to add some!</p>
         </div>
       </div>
+      <div class="sidebar-section wishlist-tile" id="wishlist-tile" onclick="navigate('wishlist')" style="margin-top:16px;cursor:pointer">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="wishlist-tile-icon">🔖</div>
+          <div>
+            <h4 class="sidebar-heading" style="margin-bottom:2px">Read Later</h4>
+            <p style="color:var(--text-muted);font-size:12px;margin:0"><span id="wishlist-tile-count">0</span> books saved</p>
+          </div>
+          <span style="margin-left:auto;color:var(--text-muted);font-size:18px">›</span>
+        </div>
+      </div>
     </aside>
+  </main>
+</div>
+
+<!-- ─── WISHLIST PAGE ─────────────────────────────────────────────────── -->
+<div class="page" id="page-wishlist">
+  <div class="search-hero">
+    <div class="search-hero-inner">
+      <button class="back-btn" onclick="navigate('profile')">← Back to Profile</button>
+      <h2>🔖 Read Later</h2>
+      <p style="color:var(--text-muted);font-size:14px;margin-top:6px">Books you want to read next.</p>
+    </div>
+  </div>
+  <main>
+    <div id="wishlist-books-list"></div>
   </main>
 </div>
 
