@@ -23,6 +23,7 @@ const state = {
   readBooks: {},
   ratings: {},
   favorites: [],
+  wishlist: {},
   currentPage: 'home',
   currentBook: null,
   currentList: null,
@@ -34,6 +35,7 @@ const state = {
   pendingRatingBook: null,
   isAdmin: false,
   bio: '',
+  avatarUrl: '',
 };
 
 // ─── AUTH ────────────────────────────────────────────────────────────────
@@ -44,6 +46,7 @@ async function initAuth() {
     state.readBooks = JSON.parse(localStorage.getItem('lbx_read') || '{}');
     state.ratings = JSON.parse(localStorage.getItem('lbx_ratings') || '{}');
     state.favorites = JSON.parse(localStorage.getItem('lbx_favorites') || '[]');
+    state.wishlist = JSON.parse(localStorage.getItem('lbx_wishlist') || '{}');
     updateAuthUI();
     return;
   }
@@ -58,6 +61,7 @@ async function initAuth() {
     state.readBooks = JSON.parse(localStorage.getItem('lbx_read') || '{}');
     state.ratings = JSON.parse(localStorage.getItem('lbx_ratings') || '{}');
     state.favorites = JSON.parse(localStorage.getItem('lbx_favorites') || '[]');
+    state.wishlist = JSON.parse(localStorage.getItem('lbx_wishlist') || '{}');
   }
   updateAuthUI();
 
@@ -72,7 +76,9 @@ async function initAuth() {
       state.readBooks = {};
       state.ratings = {};
       state.favorites = [];
+      state.wishlist = {};
       state.username = 'Reader';
+      state.avatarUrl = '';
     }
     updateAuthUI();
     // Re-render current page
@@ -139,7 +145,9 @@ async function logOut() {
   state.readBooks = {};
   state.ratings = {};
   state.favorites = [];
+  state.wishlist = {};
   state.username = 'Reader';
+  state.avatarUrl = '';
   updateAuthUI();
   navigate('home');
   showToast('Logged out', 'info');
@@ -198,10 +206,11 @@ async function loadUserData() {
 
   // Load profile
   const { data: profile } = await sb
-    .from('profiles').select('username, is_admin, bio').eq('id', uid).single();
+    .from('profiles').select('username, is_admin, bio, avatar_url').eq('id', uid).single();
   state.username = profile?.username || state.user.user_metadata?.username || 'Reader';
   state.isAdmin = !!profile?.is_admin;
   state.bio = profile?.bio || '';
+  state.avatarUrl = profile?.avatar_url || '';
 
   // Load read books
   const { data: reads } = await sb
@@ -226,6 +235,17 @@ async function loadUserData() {
   state.favorites = (favs || []).map(f => ({
     key: f.book_key, title: f.title, author: f.author, coverUrl: f.cover_url,
   }));
+
+  // Load wishlist (read later)
+  const { data: wish } = await sb
+    .from('wishlist').select('*').eq('user_id', uid);
+  state.wishlist = {};
+  (wish || []).forEach(w => {
+    state.wishlist[w.book_key] = {
+      key: w.book_key, title: w.title, author: w.author,
+      coverUrl: w.cover_url, year: w.year, dateAdded: w.date_added,
+    };
+  });
 }
 
 // Save functions — write to Supabase if logged in, localStorage as fallback
@@ -239,6 +259,7 @@ async function save() {
   localStorage.setItem('lbx_ratings', JSON.stringify(state.ratings));
   localStorage.setItem('lbx_favorites', JSON.stringify(state.favorites));
   localStorage.setItem('lbx_username', state.username);
+  localStorage.setItem('lbx_wishlist', JSON.stringify(state.wishlist));
 }
 
 function requireAuth(actionName) {
@@ -1433,7 +1454,7 @@ async function adminFindCoverOptions(title, author) {
 async function searchUsers(query) {
   if (!sb || !query.trim()) return [];
   try {
-    const { data } = await sb.from('profiles').select('id, username, bio')
+    const { data } = await sb.from('profiles').select('id, username, bio, avatar_url')
       .ilike('username', `%${query}%`).limit(8);
     return (data || []).filter(u => u.id !== state.user?.id);
   } catch { return []; }
@@ -1442,10 +1463,17 @@ async function searchUsers(query) {
 async function getFriends() {
   if (!sb || !state.user) return [];
   try {
-    const { data } = await sb.from('friendships').select('friend_id, profiles!friendships_friend_id_fkey(id, username, bio)')
+    const { data, error } = await sb.from('friendships')
+      .select('friend_id')
       .eq('user_id', state.user.id);
-    return (data || []).map(f => f.profiles).filter(Boolean);
-  } catch { return []; }
+    if (error) { console.warn('Friendships fetch error:', error); return []; }
+    if (!data?.length) return [];
+    const friendIds = data.map(f => f.friend_id);
+    const { data: profiles } = await sb.from('profiles')
+      .select('id, username, bio, avatar_url')
+      .in('id', friendIds);
+    return (profiles || []);
+  } catch (e) { console.warn('Friends error:', e); return []; }
 }
 
 async function addFriend(friendId) {
@@ -1484,10 +1512,13 @@ async function loadFriendsSidebar() {
   let html = '';
   for (const friend of friends) {
     const activity = await getFriendActivity(friend.id);
+    const friendAvatarHtml = friend.avatar_url
+      ? `<img class="friend-avatar friend-avatar-img" src="${escHtml(friend.avatar_url)}" alt="${escHtml(friend.username)}" onerror="this.outerHTML='<div class=\\'friend-avatar\\'>${(friend.username || '?')[0].toUpperCase()}</div>'">`
+      : `<div class="friend-avatar">${(friend.username || '?')[0].toUpperCase()}</div>`;
     html += `
       <div class="friend-item">
         <div class="friend-info">
-          <div class="friend-avatar">${(friend.username || '?')[0].toUpperCase()}</div>
+          ${friendAvatarHtml}
           <div>
             <div class="friend-name">${escHtml(friend.username || 'User')}</div>
             ${activity.length ? `<div class="friend-activity">${activity.map(a =>
@@ -1524,13 +1555,17 @@ function bindFriendSearch() {
       const friends = await getFriends();
       const friendIds = new Set(friends.map(f => f.id));
       if (!users.length) { resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">No users found</div>'; resultsEl.style.display = ''; return; }
-      resultsEl.innerHTML = users.map(u => `
+      resultsEl.innerHTML = users.map(u => {
+        const sAvatarHtml = u.avatar_url
+          ? `<img class="friend-avatar friend-avatar-img" src="${escHtml(u.avatar_url)}" style="width:28px;height:28px" alt="" onerror="this.outerHTML='<div class=\\'friend-avatar\\' style=\\'width:28px;height:28px;font-size:12px\\'>${(u.username || '?')[0].toUpperCase()}</div>'">`
+          : `<div class="friend-avatar" style="width:28px;height:28px;font-size:12px">${(u.username || '?')[0].toUpperCase()}</div>`;
+        return `
         <div class="friend-search-item" data-user-id="${u.id}">
-          <div class="friend-avatar" style="width:28px;height:28px;font-size:12px">${(u.username || '?')[0].toUpperCase()}</div>
+          ${sAvatarHtml}
           <span>${escHtml(u.username)}</span>
           ${friendIds.has(u.id) ? '<span style="color:var(--accent-green);font-size:12px">✓ Friends</span>' : `<button class="btn btn-primary btn-sm add-friend-btn" data-user-id="${u.id}" style="margin-left:auto;padding:2px 10px;font-size:11px">Add</button>`}
         </div>
-      `).join('');
+      `}).join('');
       resultsEl.style.display = '';
       resultsEl.querySelectorAll('.add-friend-btn').forEach(btn => {
         btn.addEventListener('click', async (e) => {
@@ -1551,16 +1586,27 @@ function bindFriendSearch() {
 async function getBookReviews(bookKey) {
   if (!sb) return [];
   try {
-    const { data } = await sb.from('reviews')
-      .select('id, user_id, book_key, book_title, rating, review_text, created_at, profiles!reviews_user_id_fkey(username)')
+    // Fetch reviews first
+    const { data: reviews, error } = await sb.from('reviews')
+      .select('id, user_id, book_key, book_title, rating, review_text, created_at')
       .eq('book_key', bookKey)
       .order('created_at', { ascending: false })
       .limit(20);
-    return (data || []).map(r => ({
+    if (error) { console.warn('Reviews fetch error:', error); return []; }
+    if (!reviews?.length) return [];
+    // Fetch usernames separately to avoid FK naming issues
+    const userIds = [...new Set(reviews.map(r => r.user_id))];
+    const { data: profiles } = await sb.from('profiles')
+      .select('id, username, avatar_url')
+      .in('id', userIds);
+    const profileMap = {};
+    (profiles || []).forEach(p => { profileMap[p.id] = p; });
+    return reviews.map(r => ({
       ...r,
-      username: r.profiles?.username || 'Anonymous',
+      username: profileMap[r.user_id]?.username || 'Anonymous',
+      avatar_url: profileMap[r.user_id]?.avatar_url || null,
     }));
-  } catch { return []; }
+  } catch (e) { console.warn('Reviews error:', e); return []; }
 }
 
 async function submitReview(bookKey, bookTitle, rating, reviewText) {
@@ -1607,6 +1653,8 @@ function navigate(page, params = {}) {
     loadListDetail(params.listId);
   } else if (page === 'profile') {
     loadProfilePage();
+  } else if (page === 'wishlist') {
+    loadWishlistPage();
   } else if (page === 'lists') {
     loadListsPreviews();
   }
@@ -2052,6 +2100,7 @@ async function loadBookDetail(book) {
   const isRead = !!state.readBooks[book.key];
   const rating = state.ratings[book.key] || 0;
   const isFav = state.favorites.some(f => f.key === book.key);
+  const isWish = !!state.wishlist[book.key];
   const cover = coverUrl(book.coverUrl, 'L');
 
   document.getElementById('book-detail-content').innerHTML = `
@@ -2086,6 +2135,9 @@ async function loadBookDetail(book) {
             <button class="detail-action-btn ${isFav ? 'active-fav' : ''}" id="detail-fav-btn">
               <span>♥</span> ${isFav ? 'Favorited' : 'Add to Favorites'}
             </button>
+            <button class="detail-action-btn ${isWish ? 'active-wish' : ''}" id="detail-wish-btn">
+              <span>🔖</span> ${isWish ? 'Saved' : 'Read Later'}
+            </button>
             <div class="detail-rating">
               <span class="detail-rating-label">Rate:</span>
               ${[1,2,3,4,5].map(i => `<span class="detail-star ${i <= rating ? 'filled' : ''}" data-val="${i}">★</span>`).join('')}
@@ -2109,7 +2161,9 @@ async function loadBookDetail(book) {
           ${state.user ? `
           <div class="write-review-form" id="write-review-form">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-              <div class="review-avatar">${state.username[0].toUpperCase()}</div>
+              ${state.avatarUrl
+                ? `<img class="review-avatar review-avatar-img" src="${escHtml(state.avatarUrl)}" alt="${escHtml(state.username)}" onerror="this.outerHTML='<div class=\\'review-avatar\\'>${state.username[0].toUpperCase()}</div>'">`
+                : `<div class="review-avatar">${state.username[0].toUpperCase()}</div>`}
               <span style="font-size:13px;color:var(--text-secondary)">Write a review</span>
               <div class="review-form-stars" id="review-form-stars">
                 ${[1,2,3,4,5].map(i => `<span class="review-form-star" data-val="${i}">☆</span>`).join('')}
@@ -2221,6 +2275,13 @@ function bindDetailActions(book) {
     const isFav = state.favorites.some(f => f.key === book.key);
     const btn = document.getElementById('detail-fav-btn');
     if (btn) { btn.className = `detail-action-btn ${isFav ? 'active-fav' : ''}`; btn.innerHTML = `<span>♥</span> ${isFav ? 'Favorited' : 'Add to Favorites'}`; }
+  });
+
+  document.getElementById('detail-wish-btn')?.addEventListener('click', () => {
+    toggleWishlist(book);
+    const isWish = !!state.wishlist[book.key];
+    const btn = document.getElementById('detail-wish-btn');
+    if (btn) { btn.className = `detail-action-btn ${isWish ? 'active-wish' : ''}`; btn.innerHTML = `<span>🔖</span> ${isWish ? 'Saved' : 'Read Later'}`; }
   });
 
   const stars = document.querySelectorAll('.detail-star');
@@ -2351,10 +2412,13 @@ async function loadAndRenderReviews(book) {
     const date = new Date(r.created_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
     const stars = r.rating ? '★'.repeat(r.rating) + '☆'.repeat(5 - r.rating) : '';
     const isOwn = state.user && r.user_id === state.user.id;
+    const avatarHtml = r.avatar_url
+      ? `<img class="review-avatar review-avatar-img" src="${escHtml(r.avatar_url)}" alt="${escHtml(r.username)}" onerror="this.outerHTML='<div class=\\'review-avatar\\'>${(r.username || '?')[0].toUpperCase()}</div>'">`
+      : `<div class="review-avatar">${(r.username || '?')[0].toUpperCase()}</div>`;
     return `
       <div class="review-item">
         <div class="review-header">
-          <div class="review-avatar">${(r.username || '?')[0].toUpperCase()}</div>
+          ${avatarHtml}
           <div class="review-meta">
             <div class="review-name">${escHtml(r.username)}</div>
             ${stars ? `<div class="review-stars">${stars}</div>` : ''}
@@ -2586,18 +2650,49 @@ function loadProfilePage() {
   const readCount = Object.keys(state.readBooks).length;
   const ratedCount = Object.keys(state.ratings).filter(k => state.ratings[k] > 0).length;
   const favCount = state.favorites.length;
+  const wishCount = Object.keys(state.wishlist).length;
   document.getElementById('stat-read').textContent = readCount;
   document.getElementById('stat-rated').textContent = ratedCount;
   document.getElementById('stat-favs').textContent = favCount;
+  document.getElementById('stat-wishlist').textContent = wishCount;
   document.getElementById('profile-username').textContent = state.username;
-  document.getElementById('profile-avatar-letter').textContent = state.username[0].toUpperCase();
+
+  // Avatar display
+  const avatarEl = document.getElementById('profile-avatar-letter');
+  if (avatarEl) {
+    if (state.avatarUrl) {
+      avatarEl.innerHTML = `<img src="${escHtml(state.avatarUrl)}" alt="${escHtml(state.username)}" class="profile-big-avatar-img" onerror="this.remove();this.parentElement.textContent='${state.username[0].toUpperCase()}'">`;
+    } else {
+      avatarEl.textContent = state.username[0].toUpperCase();
+    }
+  }
+  // Header small avatar
+  const smallAvatar = document.getElementById('profile-avatar-small');
+  if (smallAvatar) {
+    if (state.avatarUrl) {
+      smallAvatar.innerHTML = `<img src="${escHtml(state.avatarUrl)}" alt="" class="header-avatar-img" onerror="this.remove();this.parentElement.textContent='${state.username[0].toUpperCase()}'">`;
+    } else {
+      smallAvatar.textContent = state.username[0].toUpperCase();
+    }
+  }
+
   const bioEl = document.getElementById('profile-bio');
   if (bioEl) bioEl.textContent = state.bio || '';
   if (bioEl) bioEl.style.display = state.bio ? '' : 'none';
   const emailEl = document.getElementById('profile-email');
   if (emailEl) emailEl.textContent = state.user?.email || '';
+
+  // Show current avatar URL in edit form
+  const avatarInput = document.getElementById('avatar-url-input');
+  if (avatarInput) avatarInput.value = state.avatarUrl || '';
+
+  // Update wishlist tile count
+  const wishTileCount = document.getElementById('wishlist-tile-count');
+  if (wishTileCount) wishTileCount.textContent = Object.keys(state.wishlist).length;
+
   renderFavorites();
   renderReadList();
+  renderWishlist();
   renderProfileLists();
   loadFriendsSidebar();
   bindFriendSearch();
@@ -2785,8 +2880,81 @@ async function toggleFavorite(book) {
   save();
 }
 
+// ─── WISHLIST (READ LATER) ──────────────────────────────────────────────
+async function toggleWishlist(book) {
+  if (!requireAuth('save to wishlist')) return;
+  const key = book.key;
+  if (state.wishlist[key]) {
+    delete state.wishlist[key];
+    showToast(`Removed "${book.title}" from Read Later`);
+    if (state.user) {
+      await sb.from('wishlist').delete()
+        .eq('user_id', state.user.id).eq('book_key', key);
+    }
+  } else {
+    const dateAdded = new Date().toISOString();
+    state.wishlist[key] = { key, title: book.title, author: book.author, coverUrl: book.coverUrl, year: book.year, dateAdded };
+    showToast(`Added "${book.title}" to Read Later 🔖`);
+    if (state.user) {
+      await sb.from('wishlist').upsert({
+        user_id: state.user.id, book_key: key, title: book.title, author: book.author,
+        cover_url: book.coverUrl, year: book.year, date_added: dateAdded,
+      }, { onConflict: 'user_id,book_key' });
+    }
+  }
+  save();
+}
+
+function renderWishlist() {
+  const el = document.getElementById('wishlist-books-list');
+  if (!el) return;
+  const keys = Object.keys(state.wishlist);
+  if (!keys.length) {
+    el.innerHTML = `<div class="empty-state"><svg width="48" height="48" fill="none" viewBox="0 0 24 24"><path d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" stroke="currentColor" stroke-width="1.5"/></svg><h3>No books saved yet</h3><p>Browse books and tap "Read Later" to save them here.</p></div>`;
+    return;
+  }
+  el.innerHTML = keys.map(key => {
+    const b = state.wishlist[key];
+    const cover = coverUrl(b.coverUrl);
+    const dateAdded = b.dateAdded ? new Date(b.dateAdded).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : '';
+    return `
+      <div class="book-list-item" onclick="openBook(${JSON.stringify(b).replace(/"/g, '&quot;')})">
+        ${cover ? `<img class="book-list-cover" src="${cover}" alt="${escHtml(b.title)}" onerror="this.style.display='none'">` : `<div class="book-list-cover-placeholder"><svg width="16" height="22" viewBox="0 0 24 32" fill="none"><rect x="0" y="0" width="24" height="32" rx="2" fill="#3a4555"/></svg></div>`}
+        <div class="book-list-info">
+          <div class="book-list-title">${escHtml(b.title)}</div>
+          <div class="book-list-author">${escHtml(b.author)}</div>
+          ${dateAdded ? `<div class="date-read">Added ${dateAdded}</div>` : ''}
+        </div>
+        <button class="wishlist-remove-btn" data-key="${escHtml(key)}" title="Remove" onclick="event.stopPropagation()">✕</button>
+      </div>`;
+  }).join('');
+
+  el.querySelectorAll('.wishlist-remove-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const key = btn.dataset.key;
+      const book = state.wishlist[key];
+      if (book) {
+        await toggleWishlist(book);
+        renderWishlist();
+        // Update wishlist count on profile
+        const wishCount = document.getElementById('stat-wishlist');
+        if (wishCount) wishCount.textContent = Object.keys(state.wishlist).length;
+      }
+    });
+  });
+}
+
 function findBookByKey(key) {
   return [...state.popularBooks, ...state.classicsBooks, ...state.fictionBooks, ...state.searchResults].find(b => b.key === key);
+}
+
+function loadWishlistPage() {
+  if (sb && !state.user) {
+    openAuthModal('login');
+    navigate('home');
+    return;
+  }
+  renderWishlist();
 }
 
 // ─── RATING MODAL ────────────────────────────────────────────────────────
@@ -3136,23 +3304,42 @@ document.addEventListener('DOMContentLoaded', async () => {
     const form = document.getElementById('edit-name-form');
     const input = document.getElementById('username-input');
     const bioInput = document.getElementById('bio-input');
+    const avatarInput = document.getElementById('avatar-url-input');
     form.style.display = form.style.display === 'none' ? 'flex' : 'none';
     if (input) { input.value = state.username; input.focus(); }
     if (bioInput) bioInput.value = state.bio || '';
+    if (avatarInput) avatarInput.value = state.avatarUrl || '';
   });
   document.getElementById('save-username-btn')?.addEventListener('click', async () => {
     const val = document.getElementById('username-input').value.trim();
     const bioVal = document.getElementById('bio-input')?.value.trim() || '';
+    const avatarVal = document.getElementById('avatar-url-input')?.value.trim() || '';
     if (val) {
       state.username = val;
       state.bio = bioVal;
+      state.avatarUrl = avatarVal;
       if (state.user) {
-        await sb.from('profiles').update({ username: val, bio: bioVal }).eq('id', state.user.id);
+        await sb.from('profiles').update({ username: val, bio: bioVal, avatar_url: avatarVal || null }).eq('id', state.user.id);
       }
       save();
       document.getElementById('profile-username').textContent = val;
-      document.getElementById('profile-avatar-letter').textContent = val[0].toUpperCase();
-      document.getElementById('profile-avatar-small').textContent = val[0].toUpperCase();
+      // Update avatar
+      const avatarEl = document.getElementById('profile-avatar-letter');
+      if (avatarEl) {
+        if (avatarVal) {
+          avatarEl.innerHTML = `<img src="${escHtml(avatarVal)}" alt="${escHtml(val)}" class="profile-big-avatar-img" onerror="this.remove();this.parentElement.textContent='${val[0].toUpperCase()}'">`;
+        } else {
+          avatarEl.textContent = val[0].toUpperCase();
+        }
+      }
+      const smallAvatar = document.getElementById('profile-avatar-small');
+      if (smallAvatar) {
+        if (avatarVal) {
+          smallAvatar.innerHTML = `<img src="${escHtml(avatarVal)}" alt="" class="header-avatar-img" onerror="this.remove();this.parentElement.textContent='${val[0].toUpperCase()}'">`;
+        } else {
+          smallAvatar.textContent = val[0].toUpperCase();
+        }
+      }
       const bioEl = document.getElementById('profile-bio');
       if (bioEl) { bioEl.textContent = bioVal; bioEl.style.display = bioVal ? '' : 'none'; }
       document.getElementById('edit-name-form').style.display = 'none';
