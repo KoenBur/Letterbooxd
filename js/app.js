@@ -205,8 +205,16 @@ async function loadUserData() {
   state.isAdmin = false;
 
   // Load profile
-  const { data: profile } = await sb
+  let profile;
+  const { data: p1, error: e1 } = await sb
     .from('profiles').select('username, is_admin, bio, avatar_url').eq('id', uid).single();
+  if (e1) {
+    const { data: p2 } = await sb
+      .from('profiles').select('username, is_admin, bio').eq('id', uid).single();
+    profile = p2;
+  } else {
+    profile = p1;
+  }
   state.username = profile?.username || state.user.user_metadata?.username || 'Reader';
   state.isAdmin = !!profile?.is_admin;
   state.bio = profile?.bio || '';
@@ -237,15 +245,20 @@ async function loadUserData() {
   }));
 
   // Load wishlist (read later)
-  const { data: wish } = await sb
-    .from('wishlist').select('*').eq('user_id', uid);
-  state.wishlist = {};
-  (wish || []).forEach(w => {
-    state.wishlist[w.book_key] = {
-      key: w.book_key, title: w.title, author: w.author,
-      coverUrl: w.cover_url, year: w.year, dateAdded: w.date_added,
-    };
-  });
+  try {
+    const { data: wish } = await sb
+      .from('wishlist').select('*').eq('user_id', uid);
+    state.wishlist = {};
+    (wish || []).forEach(w => {
+      state.wishlist[w.book_key] = {
+        key: w.book_key, title: w.title, author: w.author,
+        coverUrl: w.cover_url, year: w.year, dateAdded: w.date_added,
+      };
+    });
+  } catch (e) {
+    console.warn('Wishlist table may not exist yet:', e);
+    state.wishlist = {};
+  }
 }
 
 // Save functions — write to Supabase if logged in, localStorage as fallback
@@ -1454,8 +1467,14 @@ async function adminFindCoverOptions(title, author) {
 async function searchUsers(query) {
   if (!sb || !query.trim()) return [];
   try {
-    const { data } = await sb.from('profiles').select('id, username, bio, avatar_url')
+    const { data, error } = await sb.from('profiles').select('id, username, bio, avatar_url')
       .ilike('username', `%${query}%`).limit(8);
+    if (error) {
+      // Fallback: avatar_url column might not exist yet
+      const { data: fallback } = await sb.from('profiles').select('id, username, bio')
+        .ilike('username', `%${query}%`).limit(8);
+      return (fallback || []).filter(u => u.id !== state.user?.id);
+    }
     return (data || []).filter(u => u.id !== state.user?.id);
   } catch { return []; }
 }
@@ -1469,9 +1488,19 @@ async function getFriends() {
     if (error) { console.warn('Friendships fetch error:', error); return []; }
     if (!data?.length) return [];
     const friendIds = data.map(f => f.friend_id);
-    const { data: profiles } = await sb.from('profiles')
+    // Try with avatar_url first, fallback without
+    let profiles;
+    const { data: p1, error: e1 } = await sb.from('profiles')
       .select('id, username, bio, avatar_url')
       .in('id', friendIds);
+    if (e1) {
+      const { data: p2 } = await sb.from('profiles')
+        .select('id, username, bio')
+        .in('id', friendIds);
+      profiles = p2;
+    } else {
+      profiles = p1;
+    }
     return (profiles || []);
   } catch (e) { console.warn('Friends error:', e); return []; }
 }
@@ -1545,40 +1574,60 @@ function bindFriendSearch() {
   const resultsEl = document.getElementById('friend-search-results');
   if (!input || !resultsEl) return;
 
+  // Remove old listeners by replacing element
+  const newInput = input.cloneNode(true);
+  input.parentNode.replaceChild(newInput, input);
+
   let debounce;
-  input.addEventListener('input', () => {
-    clearTimeout(debounce);
-    const q = input.value.trim();
+  async function doFriendSearch(q) {
     if (!q) { resultsEl.innerHTML = ''; resultsEl.style.display = 'none'; return; }
-    debounce = setTimeout(async () => {
-      const users = await searchUsers(q);
-      const friends = await getFriends();
-      const friendIds = new Set(friends.map(f => f.id));
-      if (!users.length) { resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">No users found</div>'; resultsEl.style.display = ''; return; }
-      resultsEl.innerHTML = users.map(u => {
-        const sAvatarHtml = u.avatar_url
-          ? `<img class="friend-avatar friend-avatar-img" src="${escHtml(u.avatar_url)}" style="width:28px;height:28px" alt="" onerror="this.outerHTML='<div class=\\'friend-avatar\\' style=\\'width:28px;height:28px;font-size:12px\\'>${(u.username || '?')[0].toUpperCase()}</div>'">`
-          : `<div class="friend-avatar" style="width:28px;height:28px;font-size:12px">${(u.username || '?')[0].toUpperCase()}</div>`;
-        return `
-        <div class="friend-search-item" data-user-id="${u.id}">
-          ${sAvatarHtml}
-          <span>${escHtml(u.username)}</span>
-          ${friendIds.has(u.id) ? '<span style="color:var(--accent-green);font-size:12px">✓ Friends</span>' : `<button class="btn btn-primary btn-sm add-friend-btn" data-user-id="${u.id}" style="margin-left:auto;padding:2px 10px;font-size:11px">Add</button>`}
-        </div>
-      `}).join('');
-      resultsEl.style.display = '';
-      resultsEl.querySelectorAll('.add-friend-btn').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-          e.stopPropagation();
-          await addFriend(btn.dataset.userId);
-          showToast('Friend added!');
-          input.value = '';
-          resultsEl.innerHTML = '';
-          resultsEl.style.display = 'none';
-          loadFriendsSidebar();
-        });
+    resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">Searching…</div>';
+    resultsEl.style.display = '';
+    const users = await searchUsers(q);
+    const friends = await getFriends();
+    const friendIds = new Set(friends.map(f => f.id));
+    if (!users.length) { resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">No users found</div>'; resultsEl.style.display = ''; return; }
+    resultsEl.innerHTML = users.map(u => {
+      const sAvatarHtml = u.avatar_url
+        ? `<img class="friend-avatar friend-avatar-img" src="${escHtml(u.avatar_url)}" style="width:28px;height:28px" alt="" onerror="this.outerHTML='<div class=\\'friend-avatar\\' style=\\'width:28px;height:28px;font-size:12px\\'>${(u.username || '?')[0].toUpperCase()}</div>'">`
+        : `<div class="friend-avatar" style="width:28px;height:28px;font-size:12px">${(u.username || '?')[0].toUpperCase()}</div>`;
+      return `
+      <div class="friend-search-item" data-user-id="${u.id}">
+        ${sAvatarHtml}
+        <span>${escHtml(u.username)}</span>
+        ${friendIds.has(u.id) ? '<span style="color:var(--accent-green);font-size:12px">✓ Friends</span>' : `<button class="btn btn-primary btn-sm add-friend-btn" data-user-id="${u.id}" style="margin-left:auto;padding:2px 10px;font-size:11px">Add</button>`}
+      </div>
+    `}).join('');
+    resultsEl.style.display = '';
+    resultsEl.querySelectorAll('.add-friend-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await addFriend(btn.dataset.userId);
+        showToast('Friend added!');
+        newInput.value = '';
+        resultsEl.innerHTML = '';
+        resultsEl.style.display = 'none';
+        loadFriendsSidebar();
       });
-    }, 300);
+    });
+  }
+
+  // Search as you type (debounced)
+  newInput.addEventListener('input', () => {
+    clearTimeout(debounce);
+    const q = newInput.value.trim();
+    if (!q) { resultsEl.innerHTML = ''; resultsEl.style.display = 'none'; return; }
+    debounce = setTimeout(() => doFriendSearch(q), 300);
+  });
+
+  // Also search immediately on Enter
+  newInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      clearTimeout(debounce);
+      const q = newInput.value.trim();
+      doFriendSearch(q);
+    }
   });
 }
 
@@ -1596,9 +1645,18 @@ async function getBookReviews(bookKey) {
     if (!reviews?.length) return [];
     // Fetch usernames separately to avoid FK naming issues
     const userIds = [...new Set(reviews.map(r => r.user_id))];
-    const { data: profiles } = await sb.from('profiles')
+    let profiles;
+    const { data: p1, error: e1 } = await sb.from('profiles')
       .select('id, username, avatar_url')
       .in('id', userIds);
+    if (e1) {
+      const { data: p2 } = await sb.from('profiles')
+        .select('id, username')
+        .in('id', userIds);
+      profiles = p2;
+    } else {
+      profiles = p1;
+    }
     const profileMap = {};
     (profiles || []).forEach(p => { profileMap[p.id] = p; });
     return reviews.map(r => ({
@@ -2888,18 +2946,20 @@ async function toggleWishlist(book) {
     delete state.wishlist[key];
     showToast(`Removed "${book.title}" from Read Later`);
     if (state.user) {
-      await sb.from('wishlist').delete()
-        .eq('user_id', state.user.id).eq('book_key', key);
+      try { await sb.from('wishlist').delete().eq('user_id', state.user.id).eq('book_key', key); }
+      catch (e) { console.warn('Wishlist delete failed (table may not exist):', e); }
     }
   } else {
     const dateAdded = new Date().toISOString();
     state.wishlist[key] = { key, title: book.title, author: book.author, coverUrl: book.coverUrl, year: book.year, dateAdded };
     showToast(`Added "${book.title}" to Read Later 🔖`);
     if (state.user) {
-      await sb.from('wishlist').upsert({
-        user_id: state.user.id, book_key: key, title: book.title, author: book.author,
-        cover_url: book.coverUrl, year: book.year, date_added: dateAdded,
-      }, { onConflict: 'user_id,book_key' });
+      try {
+        await sb.from('wishlist').upsert({
+          user_id: state.user.id, book_key: key, title: book.title, author: book.author,
+          cover_url: book.coverUrl, year: book.year, date_added: dateAdded,
+        }, { onConflict: 'user_id,book_key' });
+      } catch (e) { console.warn('Wishlist insert failed (table may not exist):', e); }
     }
   }
   save();
@@ -3319,7 +3379,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       state.bio = bioVal;
       state.avatarUrl = avatarVal;
       if (state.user) {
-        await sb.from('profiles').update({ username: val, bio: bioVal, avatar_url: avatarVal || null }).eq('id', state.user.id);
+        const { error: updateErr } = await sb.from('profiles').update({ username: val, bio: bioVal, avatar_url: avatarVal || null }).eq('id', state.user.id);
+        if (updateErr) {
+          // avatar_url column might not exist yet — try without it
+          await sb.from('profiles').update({ username: val, bio: bioVal }).eq('id', state.user.id);
+        }
       }
       save();
       document.getElementById('profile-username').textContent = val;
