@@ -1470,13 +1470,21 @@ async function searchUsers(query) {
     const { data, error } = await sb.from('profiles').select('id, username, bio, avatar_url')
       .ilike('username', `%${query}%`).limit(8);
     if (error) {
+      console.error('Profile search error:', error);
       // Fallback: avatar_url column might not exist yet
-      const { data: fallback } = await sb.from('profiles').select('id, username, bio')
+      const { data: fallback, error: fallbackErr } = await sb.from('profiles').select('id, username, bio')
         .ilike('username', `%${query}%`).limit(8);
+      if (fallbackErr) {
+        console.error('Profile search fallback error:', fallbackErr);
+        throw fallbackErr;
+      }
       return (fallback || []).filter(u => u.id !== state.user?.id);
     }
     return (data || []).filter(u => u.id !== state.user?.id);
-  } catch { return []; }
+  } catch (e) {
+    console.error('searchUsers exception:', e);
+    throw e;
+  }
 }
 
 async function getFriends() {
@@ -1583,7 +1591,14 @@ function bindFriendSearch() {
     if (!q) { resultsEl.innerHTML = ''; resultsEl.style.display = 'none'; return; }
     resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">Searching…</div>';
     resultsEl.style.display = '';
-    const users = await searchUsers(q);
+    let users;
+    try {
+      users = await searchUsers(q);
+    } catch (e) {
+      resultsEl.innerHTML = `<div class="friend-search-item" style="color:var(--accent-red)">Search failed: ${escHtml(e?.message || 'Check Supabase RLS policies on the profiles table')}</div>`;
+      resultsEl.style.display = '';
+      return;
+    }
     const friends = await getFriends();
     const friendIds = new Set(friends.map(f => f.id));
     if (!users.length) { resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">No users found</div>'; resultsEl.style.display = ''; return; }
