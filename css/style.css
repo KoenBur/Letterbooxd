@@ -1138,6 +1138,16 @@ main { max-width: 1200px; margin: 0 auto; padding: 32px 20px 60px; }
 .friend-remove-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 12px; padding: 2px 4px; flex-shrink: 0; }
 .friend-remove-btn:hover { color: #e74c3c; }
 
+/* ─── EDITIONS ───────────────────────────────────────────── */
+#book-editions-list { display: flex; flex-wrap: wrap; gap: 10px; padding-top: 10px; }
+.edition-item { display: flex; gap: 10px; align-items: flex-start; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; min-width: 160px; flex: 1 1 160px; max-width: 220px; }
+.edition-cover { width: 36px; height: 52px; object-fit: cover; border-radius: 3px; flex-shrink: 0; }
+.edition-cover-placeholder { width: 36px; height: 52px; background: var(--bg-secondary); border-radius: 3px; flex-shrink: 0; }
+.edition-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.edition-publisher { font-size: 12px; font-weight: 500; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.edition-year { font-size: 11px; color: var(--text-muted); }
+.edition-isbn { font-size: 10px; color: var(--text-muted); font-family: monospace; }
+
 /* ─── REVIEW FORM ────────────────────────────────────────── */
 .write-review-form { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 16px; }
 .write-review-form textarea { width: 100%; padding: 8px 10px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-size: 13px; font-family: inherit; resize: vertical; }
