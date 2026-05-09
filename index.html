@@ -253,6 +253,37 @@
   </main>
 </div>
 
+<!-- ─── USER PROFILE PAGE ───────────────────────────────────────────────── -->
+<div class="page" id="page-user">
+  <div class="profile-header-section">
+    <div class="profile-header-inner">
+      <div class="profile-big-avatar" id="user-avatar-letter"></div>
+      <div>
+        <div class="profile-name" id="user-username"></div>
+        <div class="profile-bio" id="user-bio"></div>
+        <div style="color:var(--text-muted);font-size:13px">Member · Letterbooxd</div>
+        <div class="profile-stats">
+          <div class="stat-item"><span class="stat-num" id="user-stat-read">0</span><span class="stat-label">Books</span></div>
+          <div class="stat-item"><span class="stat-num" id="user-stat-rated">0</span><span class="stat-label">Rated</span></div>
+        </div>
+      </div>
+      <div style="margin-left:auto">
+        <button class="back-btn" id="user-back-btn">← Back</button>
+      </div>
+    </div>
+  </div>
+  <main>
+    <section style="margin-bottom:32px">
+      <div class="section-header"><h2>Recently Read</h2></div>
+      <div id="user-read-list"></div>
+    </section>
+    <section id="user-reviews-section" style="margin-bottom:32px">
+      <div class="section-header"><h2>Reviews</h2></div>
+      <div class="review-list" id="user-review-list"></div>
+    </section>
+  </main>
+</div>
+
 <!-- ─── AUTH MODAL ──────────────────────────────────────────────────────── -->
 <div class="modal-overlay" id="auth-modal">
   <div class="modal auth-modal">

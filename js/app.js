@@ -1639,7 +1639,7 @@ async function loadFriendsSidebar() {
       : `<div class="friend-avatar">${(friend.username || '?')[0].toUpperCase()}</div>`;
     html += `
       <div class="friend-item">
-        <div class="friend-info">
+        <div class="friend-info friend-info-link" data-user-id="${friend.id}" style="cursor:pointer" title="View ${escHtml(friend.username || 'User')}'s profile">
           ${friendAvatarHtml}
           <div>
             <div class="friend-name">${escHtml(friend.username || 'User')}</div>
@@ -1653,8 +1653,13 @@ async function loadFriendsSidebar() {
   }
   friendsList.innerHTML = html;
 
+  friendsList.querySelectorAll('.friend-info-link').forEach(el => {
+    el.addEventListener('click', () => navigate('user', { userId: el.dataset.userId }));
+  });
+
   friendsList.querySelectorAll('.friend-remove-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
       await removeFriend(btn.dataset.friendId);
       showToast('Friend removed');
       loadFriendsSidebar();
@@ -1811,6 +1816,8 @@ function navigate(page, params = {}) {
     loadListDetail(params.listId);
   } else if (page === 'profile') {
     loadProfilePage();
+  } else if (page === 'user') {
+    loadUserProfile(params.userId);
   } else if (page === 'wishlist') {
     loadWishlistPage();
   } else if (page === 'lists') {
@@ -2388,6 +2395,7 @@ async function loadBookDetail(book) {
           <div class="detail-row"><span class="detail-label">Author</span><span class="detail-value"><a href="#" class="author-link" data-author="${escHtml(book.author)}">${escHtml(book.author)}</a></span></div>
           ${book.year ? `<div class="detail-row"><span class="detail-label">Published</span><span class="detail-value">${book.year}</span></div>` : ''}
           ${book.pages ? `<div class="detail-row"><span class="detail-label">Pages</span><span class="detail-value">${book.pages}</span></div>` : ''}
+          ${book.isbn ? `<div class="detail-row"><span class="detail-label">ISBN</span><span class="detail-value" style="font-family:monospace;font-size:12px">${escHtml(book.isbn)}</span></div>` : ''}
           <div class="detail-row"><span class="detail-label">Book ID</span><span class="detail-value" style="font-family:monospace;font-size:12px">${escHtml(book.key)}</span></div>
         </div>
       </div>
@@ -2850,6 +2858,81 @@ function bookCardHTML(book) {
       </div>
     </div>
   `;
+}
+
+// ─── USER PROFILE (public view) ───────────────────────────────────────────
+async function loadUserProfile(userId) {
+  if (!sb) return;
+
+  // Fetch profile info
+  const { data: profile } = await sb.from('profiles').select('username, bio, avatar_url').eq('id', userId).single();
+  if (!profile) return;
+
+  const avatarEl = document.getElementById('user-avatar-letter');
+  const usernameEl = document.getElementById('user-username');
+  const bioEl = document.getElementById('user-bio');
+  if (avatarEl) {
+    avatarEl.innerHTML = profile.avatar_url
+      ? `<img src="${escHtml(profile.avatar_url)}" class="profile-big-avatar-img" alt="" onerror="this.remove();this.parentElement.textContent='${(profile.username||'?')[0].toUpperCase()}'"">`
+      : (profile.username || '?')[0].toUpperCase();
+  }
+  if (usernameEl) usernameEl.textContent = profile.username || 'User';
+  if (bioEl) { bioEl.textContent = profile.bio || ''; bioEl.style.display = profile.bio ? '' : 'none'; }
+
+  // Stats
+  const [{ count: readCount }, { count: ratedCount }] = await Promise.all([
+    sb.from('read_books').select('*', { count: 'exact', head: true }).eq('user_id', userId),
+    sb.from('ratings').select('*', { count: 'exact', head: true }).eq('user_id', userId),
+  ]);
+  const statRead = document.getElementById('user-stat-read');
+  const statRated = document.getElementById('user-stat-rated');
+  if (statRead) statRead.textContent = readCount || 0;
+  if (statRated) statRated.textContent = ratedCount || 0;
+
+  // Recent reads
+  const readList = document.getElementById('user-read-list');
+  if (readList) {
+    const { data: reads } = await sb.from('read_books')
+      .select('book_key, book_title, book_author, cover_url, year, date_read')
+      .eq('user_id', userId).order('date_read', { ascending: false }).limit(10);
+    if (reads?.length) {
+      readList.innerHTML = reads.map(r => `
+        <div class="read-list-item" style="cursor:default">
+          <div class="read-book-cover-wrap">
+            ${r.cover_url ? `<img class="read-book-cover" src="${escHtml(r.cover_url)}" alt="" loading="lazy">` : '<div class="read-book-cover" style="background:var(--bg-secondary)"></div>'}
+          </div>
+          <div class="book-info">
+            <div class="book-title">${escHtml(r.book_title || 'Unknown')}</div>
+            <div class="book-author">${escHtml(r.book_author || '')}</div>
+            ${r.date_read ? `<div style="font-size:12px;color:var(--text-muted)">Read ${escHtml(r.date_read)}</div>` : ''}
+          </div>
+        </div>`).join('');
+    } else {
+      readList.innerHTML = '<p style="color:var(--text-muted);font-style:italic;font-size:13px">No books read yet.</p>';
+    }
+  }
+
+  // Reviews
+  const reviewList = document.getElementById('user-review-list');
+  if (reviewList) {
+    const { data: reviews } = await sb.from('reviews')
+      .select('book_title, rating, review_text, created_at')
+      .eq('user_id', userId).order('created_at', { ascending: false }).limit(5);
+    if (reviews?.length) {
+      reviewList.innerHTML = reviews.map(r => `
+        <div class="review-item">
+          <div class="review-header">
+            <span class="review-book-title">${escHtml(r.book_title || '')}</span>
+            <span class="review-stars">${'★'.repeat(r.rating || 0)}${'☆'.repeat(5 - (r.rating || 0))}</span>
+          </div>
+          ${r.review_text ? `<div class="review-text">${escHtml(r.review_text)}</div>` : ''}
+        </div>`).join('');
+    } else {
+      reviewList.innerHTML = '<p style="color:var(--text-muted);font-style:italic;font-size:13px">No reviews yet.</p>';
+    }
+  }
+
+  document.getElementById('user-back-btn')?.addEventListener('click', () => navigate('profile'));
 }
 
 // ─── PROFILE ──────────────────────────────────────────────────────────────
