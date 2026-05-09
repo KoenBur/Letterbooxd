@@ -2533,6 +2533,7 @@ function bindDetailActions(book) {
         if (state.ratings[book.key] > 0) {
           await sb.from('ratings').upsert({
             user_id: state.user.id, book_key: book.key, rating: state.ratings[book.key],
+            book_title: book.title || null, book_author: book.author || null, cover_url: book.coverUrl || null,
           }, { onConflict: 'user_id,book_key' });
         } else {
           await sb.from('ratings').delete()
@@ -2944,7 +2945,7 @@ async function loadUserProfile(userId) {
   ] = await Promise.all([
     sb.from('favorites').select('book_key, book_title, book_author, cover_url').eq('user_id', userId).order('position'),
     sb.from('read_books').select('book_key, book_title, book_author, cover_url, year, date_read').eq('user_id', userId).order('created_at', { ascending: false }),
-    sb.from('ratings').select('book_key, rating').eq('user_id', userId).gt('rating', 0),
+    sb.from('ratings').select('book_key, rating, book_title, book_author, cover_url').eq('user_id', userId).gt('rating', 0),
     sb.from('lists').select('id, title, description').eq('user_id', userId).eq('is_curated', false),
   ]);
 
@@ -2960,13 +2961,25 @@ async function loadUserProfile(userId) {
 
   // Stat click handlers
   const readMap = Object.fromEntries(reads.map(r => [r.book_key, r]));
+  const favMap  = Object.fromEntries(favs.map(f => [f.book_key, f]));
+
+  function resolveRatedBook(r) {
+    const meta = readMap[r.book_key] || favMap[r.book_key];
+    return {
+      key:      r.book_key,
+      title:    r.book_title   || meta?.book_title   || 'Unknown Book',
+      author:   r.book_author  || meta?.book_author  || '',
+      coverUrl: r.cover_url    || meta?.cover_url    || null,
+      rating:   r.rating,
+    };
+  }
+
   document.getElementById('user-stat-item-read')?.addEventListener('click', () =>
     loadCollectionPage({ title: `${profile.username}'s Books`, books: reads.map(r => ({ ...r, key: r.book_key, title: r.book_title, author: r.book_author, coverUrl: r.cover_url, dateRead: r.date_read })), backPage: 'user', backParams: { userId } })
   );
-  document.getElementById('user-stat-item-rated')?.addEventListener('click', () => {
-    const ratedBooks = ratings.map(r => ({ key: r.book_key, title: readMap[r.book_key]?.book_title || r.book_key, author: readMap[r.book_key]?.book_author || '', coverUrl: readMap[r.book_key]?.cover_url || null, rating: r.rating }));
-    loadCollectionPage({ title: `${profile.username}'s Rated Books`, books: ratedBooks, backPage: 'user', backParams: { userId } });
-  });
+  document.getElementById('user-stat-item-rated')?.addEventListener('click', () =>
+    loadCollectionPage({ title: `${profile.username}'s Rated Books`, books: ratings.map(resolveRatedBook), backPage: 'user', backParams: { userId } })
+  );
   document.getElementById('user-stat-item-favs')?.addEventListener('click', () =>
     loadCollectionPage({ title: `${profile.username}'s Favourites`, books: favs.map(f => ({ key: f.book_key, title: f.book_title, author: f.book_author, coverUrl: f.cover_url })), backPage: 'user', backParams: { userId } })
   );
@@ -3385,6 +3398,7 @@ async function saveRating(val) {
     if (state.ratings[book.key] > 0) {
       await sb.from('ratings').upsert({
         user_id: state.user.id, book_key: book.key, rating: state.ratings[book.key],
+        book_title: book.title || null, book_author: book.author || null, cover_url: book.coverUrl || null,
       }, { onConflict: 'user_id,book_key' });
     } else {
       await sb.from('ratings').delete()
