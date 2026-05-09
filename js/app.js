@@ -1103,9 +1103,91 @@ function normalizeOLBook(doc) {
   };
 }
 
+// ─── OL WORK RESOLUTION ─────────────────────────────────────────────────
+const olWorkCache = {};
+
+function stripSubtitle(title) {
+  return (title || '')
+    .replace(/\s*\(.*?\)\s*$/, '')
+    .replace(/\s*:\s*.+$/, '')
+    .trim();
+}
+
+async function resolveToOLWork(book) {
+  if (/^OL\d+W$/.test(book.key)) return book;
+  if (olWorkCache[book.key]) return { ...book, ...olWorkCache[book.key] };
+
+  let workId = null;
+
+  // OL-sourced books already carry olKey = '/works/OL...W'
+  if (book.olKey) {
+    const m = book.olKey.match(/\/works\/(OL\d+W)/);
+    if (m) workId = m[1];
+  }
+
+  // ISBN lookup — most reliable cross-reference
+  if (!workId && book.isbn) {
+    try {
+      const r = await fetch(`${OL}/isbn/${book.isbn}.json`);
+      if (r.ok) {
+        const d = await r.json();
+        const wk = d.works?.[0]?.key;
+        if (wk) workId = wk.replace('/works/', '');
+      }
+    } catch {}
+  }
+
+  // Title + author search fallback
+  if (!workId) {
+    try {
+      const r = await fetch(
+        `${OL}/search.json?title=${encodeURIComponent(book.title)}&author=${encodeURIComponent(book.author)}&limit=1`
+      );
+      if (r.ok) {
+        const d = await r.json();
+        const wk = d.docs?.[0]?.key;
+        if (wk) workId = wk.replace('/works/', '');
+      }
+    } catch {}
+  }
+
+  if (!workId) return book;
+  const patch = { key: workId, olWorkId: workId };
+  olWorkCache[book.key] = patch;
+  return { ...book, ...patch };
+}
+
+async function migrateBookKey(oldKey, newKey) {
+  if (oldKey === newKey) return;
+
+  if (state.readBooks[oldKey] && !state.readBooks[newKey]) {
+    state.readBooks[newKey] = { ...state.readBooks[oldKey], key: newKey };
+    delete state.readBooks[oldKey];
+  }
+  if (state.ratings[oldKey] !== undefined && state.ratings[newKey] === undefined) {
+    state.ratings[newKey] = state.ratings[oldKey];
+    delete state.ratings[oldKey];
+  }
+  if (state.wishlist[oldKey] && !state.wishlist[newKey]) {
+    state.wishlist[newKey] = { ...state.wishlist[oldKey], key: newKey };
+    delete state.wishlist[oldKey];
+  }
+  state.favorites = state.favorites.map(f => f.key === oldKey ? { ...f, key: newKey } : f);
+
+  if (state.user && sb) {
+    const uid = state.user.id;
+    for (const table of ['read_books', 'ratings', 'favorites', 'wishlist', 'reviews']) {
+      sb.from(table).update({ book_key: newKey }).eq('user_id', uid).eq('book_key', oldKey)
+        .then(() => {}).catch(() => {});
+    }
+  }
+}
+
 async function searchBooks(query, limit = 20) {
   const trimmed = query.trim();
   if (!trimmed) return [];
+  const seenWorkKeys = new Set();
+  const seenSimple = new Set();
   const seenTitles = new Set();
   let results = [];
 
@@ -1125,9 +1207,12 @@ async function searchBooks(query, limit = 20) {
       const data = await res.json();
       for (const doc of (data.docs || [])) {
         if (!doc.title) continue;
-        // Deduplicate by normalized title
+        const workKey = doc.key;
+        const simpleKey = normalizeText(stripSubtitle(doc.title)) + '|' + normalizeText(doc.author_name?.[0] || '');
         const normTitle = normalizeText(doc.title);
-        if (seenTitles.has(normTitle)) continue;
+        if ((workKey && seenWorkKeys.has(workKey)) || seenSimple.has(simpleKey) || seenTitles.has(normTitle)) continue;
+        if (workKey) seenWorkKeys.add(workKey);
+        seenSimple.add(simpleKey);
         seenTitles.add(normTitle);
         results.push(normalizeOLBook(doc));
       }
@@ -1590,18 +1675,18 @@ function bindFriendSearch() {
   async function doFriendSearch(q) {
     if (!q) { resultsEl.innerHTML = ''; resultsEl.style.display = 'none'; return; }
     resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">Searching…</div>';
-    resultsEl.style.display = '';
+    resultsEl.style.display = 'block';
     let users;
     try {
       users = await searchUsers(q);
     } catch (e) {
       resultsEl.innerHTML = `<div class="friend-search-item" style="color:var(--accent-red)">Search failed: ${escHtml(e?.message || 'Check Supabase RLS policies on the profiles table')}</div>`;
-      resultsEl.style.display = '';
+      resultsEl.style.display = 'block';
       return;
     }
     const friends = await getFriends();
     const friendIds = new Set(friends.map(f => f.id));
-    if (!users.length) { resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">No users found</div>'; resultsEl.style.display = ''; return; }
+    if (!users.length) { resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">No users found</div>'; resultsEl.style.display = 'block'; return; }
     resultsEl.innerHTML = users.map(u => {
       const sAvatarHtml = u.avatar_url
         ? `<img class="friend-avatar friend-avatar-img" src="${escHtml(u.avatar_url)}" style="width:28px;height:28px" alt="" onerror="this.outerHTML='<div class=\\'friend-avatar\\' style=\\'width:28px;height:28px;font-size:12px\\'>${(u.username || '?')[0].toUpperCase()}</div>'">`
@@ -1613,7 +1698,7 @@ function bindFriendSearch() {
         ${friendIds.has(u.id) ? '<span style="color:var(--accent-green);font-size:12px">✓ Friends</span>' : `<button class="btn btn-primary btn-sm add-friend-btn" data-user-id="${u.id}" style="margin-left:auto;padding:2px 10px;font-size:11px">Add</button>`}
       </div>
     `}).join('');
-    resultsEl.style.display = '';
+    resultsEl.style.display = 'block';
     resultsEl.querySelectorAll('.add-friend-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
@@ -2163,9 +2248,56 @@ async function loadListCovers(books, listId) {
 }
 
 // ─── BOOK DETAIL ───────────────────────────────────────────────────────────
+async function loadAndRenderEditions(olWorkId) {
+  const section = document.getElementById('book-editions-section');
+  const list = document.getElementById('book-editions-list');
+  const heading = document.getElementById('editions-heading');
+  if (!section || !list || !heading) return;
+
+  try {
+    const r = await fetch(`${OL}/works/${olWorkId}/editions.json?limit=10`);
+    if (!r.ok) return;
+    const data = await r.json();
+    const editions = (data.entries || []).filter(e => e.publishers?.length || e.publish_date);
+    if (!editions.length) return;
+
+    section.style.display = '';
+    const toggle = document.getElementById('editions-toggle');
+    heading.addEventListener('click', () => {
+      const open = list.style.display !== 'none';
+      list.style.display = open ? 'none' : '';
+      if (toggle) toggle.textContent = open ? '▼ show' : '▲ hide';
+    });
+
+    list.innerHTML = editions.map(e => {
+      const coverId = e.covers?.[0];
+      const coverSrc = coverId ? `https://covers.openlibrary.org/b/id/${coverId}-S.jpg` : null;
+      const publisher = escHtml(e.publishers?.[0] || '');
+      const year = escHtml(e.publish_date || '');
+      const isbn = escHtml(e.isbn_13?.[0] || e.isbn_10?.[0] || '');
+      return `<div class="edition-item">
+        ${coverSrc ? `<img class="edition-cover" src="${escHtml(coverSrc)}" alt="" loading="lazy" onerror="this.style.display='none'">` : '<div class="edition-cover-placeholder"></div>'}
+        <div class="edition-info">
+          ${publisher ? `<div class="edition-publisher">${publisher}</div>` : ''}
+          ${year ? `<div class="edition-year">${year}</div>` : ''}
+          ${isbn ? `<div class="edition-isbn">ISBN ${isbn}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  } catch {}
+}
+
 async function openBook(book) {
   state.currentBook = book;
   navigate('book', { book });
+
+  // Resolve to canonical OL Work ID in the background
+  const resolved = await resolveToOLWork(book);
+  if (resolved.key !== book.key && state.currentPage === 'book') {
+    migrateBookKey(book.key, resolved.key);
+    state.currentBook = resolved;
+    loadBookDetail(resolved);
+  }
 }
 
 async function loadBookDetail(book) {
@@ -2256,7 +2388,7 @@ async function loadBookDetail(book) {
           <div class="detail-row"><span class="detail-label">Author</span><span class="detail-value"><a href="#" class="author-link" data-author="${escHtml(book.author)}">${escHtml(book.author)}</a></span></div>
           ${book.year ? `<div class="detail-row"><span class="detail-label">Published</span><span class="detail-value">${book.year}</span></div>` : ''}
           ${book.pages ? `<div class="detail-row"><span class="detail-label">Pages</span><span class="detail-value">${book.pages}</span></div>` : ''}
-          <div class="detail-row"><span class="detail-label">Google Books ID</span><span class="detail-value" style="font-family:monospace;font-size:12px">${escHtml(book.key)}</span></div>
+          <div class="detail-row"><span class="detail-label">Book ID</span><span class="detail-value" style="font-family:monospace;font-size:12px">${escHtml(book.key)}</span></div>
         </div>
       </div>
       <div class="tab-content" id="tab-genres" style="display:none">
@@ -2271,6 +2403,12 @@ async function loadBookDetail(book) {
       <h3 class="reviews-heading">More by <span id="author-section-name"></span></h3>
       <div class="books-grid" id="author-books-grid"></div>
     </div>
+    <div class="detail-tabs-section" id="book-editions-section" style="display:none">
+      <h3 class="reviews-heading" style="cursor:pointer;user-select:none" id="editions-heading">
+        Other editions <span id="editions-toggle" style="font-size:13px;color:var(--text-muted);font-family:inherit;font-weight:400">▼ show</span>
+      </h3>
+      <div id="book-editions-list" style="display:none"></div>
+    </div>
   `;
 
   bindDetailActions(book);
@@ -2280,6 +2418,7 @@ async function loadBookDetail(book) {
   fetchAndRenderDescription(book.key);
   loadAndRenderReviews(book);
   bindReviewForm(book);
+  if (/^OL\d+W$/.test(book.key)) loadAndRenderEditions(book.key);
 
   document.getElementById('book-back-btn')?.addEventListener('click', () => {
     if (state._prevPage && state._prevPage !== 'book') navigate(state._prevPage);
