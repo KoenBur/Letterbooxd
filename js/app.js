@@ -2938,21 +2938,26 @@ async function loadUserProfile(userId) {
 
   // Fetch everything in parallel
   const [
-    { data: favsData },
-    { data: readsData },
-    { data: ratingsData },
-    { data: listsData },
+    { data: favsData,    error: favsErr },
+    { data: readsData,   error: readsErr },
+    { data: ratingsData, error: ratingsErr },
+    { data: listsData,   error: listsErr },
   ] = await Promise.all([
-    sb.from('favorites').select('book_key, book_title, book_author, cover_url').eq('user_id', userId).order('position'),
-    sb.from('read_books').select('book_key, book_title, book_author, cover_url, year, date_read').eq('user_id', userId).order('created_at', { ascending: false }),
+    sb.from('favorites').select('book_key, book_title, book_author, cover_url, position').eq('user_id', userId),
+    sb.from('read_books').select('book_key, book_title, book_author, cover_url, year, date_read').eq('user_id', userId),
     sb.from('ratings').select('book_key, rating, book_title, book_author, cover_url').eq('user_id', userId).gt('rating', 0),
     sb.from('lists').select('id, title, description').eq('user_id', userId).eq('is_curated', false),
   ]);
 
-  const favs   = favsData   || [];
-  const reads  = readsData  || [];
+  if (favsErr)    console.error('loadUserProfile favorites error:', favsErr);
+  if (readsErr)   console.error('loadUserProfile read_books error:', readsErr);
+  if (ratingsErr) console.error('loadUserProfile ratings error:', ratingsErr);
+  if (listsErr)   console.error('loadUserProfile lists error:', listsErr);
+
+  const favs    = (favsData    || []).sort((a, b) => (a.position ?? 99) - (b.position ?? 99));
+  const reads   = readsData   || [];
   const ratings = ratingsData || [];
-  const lists  = listsData  || [];
+  const lists   = listsData   || [];
 
   // Stats
   document.getElementById('user-stat-read').textContent  = reads.length;
