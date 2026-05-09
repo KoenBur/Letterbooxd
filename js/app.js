@@ -1062,6 +1062,20 @@ function getListData(listId) {
 const OL = 'https://openlibrary.org';
 
 // ─── UTILITY ────────────────────────────────────────────────────────────
+function relativeDate(str) {
+  if (!str) return '';
+  // Handle "MMM YYYY" format stored by toggleRead
+  const my = str.match(/^(\w{3})\s+(\d{4})$/);
+  const date = my ? new Date(`${my[1]} 1, ${my[2]}`) : new Date(str);
+  if (isNaN(date)) return str;
+  const days = Math.floor((Date.now() - date) / 86400000);
+  if (days < 1)  return 'today';
+  if (days < 7)  return `${days}d ago`;
+  if (days < 30) return `~${Math.round(days / 7)}w ago`;
+  if (days < 365) return `~${Math.round(days / 30)}mo ago`;
+  return `~${Math.round(days / 365)}y ago`;
+}
+
 function normalizeText(s = '') {
   return s
     .toLowerCase()
@@ -1816,6 +1830,8 @@ function navigate(page, params = {}) {
     loadListDetail(params.listId);
   } else if (page === 'profile') {
     loadProfilePage();
+  } else if (page === 'collection') {
+    // content rendered by loadCollectionPage before navigate is called
   } else if (page === 'user') {
     loadUserProfile(params.userId);
   } else if (page === 'wishlist') {
@@ -2860,76 +2876,153 @@ function bookCardHTML(book) {
   `;
 }
 
+// ─── COLLECTION PAGE ──────────────────────────────────────────────────────
+function collectionItemHTML(book) {
+  const cover = coverUrl(book.coverUrl || book.cover_url, 'S');
+  const rating = book.rating || 0;
+  const stars = rating ? '★'.repeat(rating) + '☆'.repeat(5 - rating) : '';
+  const date = book.dateRead || book.date_read || '';
+  return `<div class="collection-item" data-book-key="${escHtml(book.key || book.book_key || '')}">
+    ${cover ? `<img class="collection-item-cover" src="${escHtml(cover)}" alt="" loading="lazy" onerror="this.style.background='var(--bg-secondary)';this.removeAttribute('src')">` : '<div class="collection-item-cover"></div>'}
+    <div class="collection-item-info">
+      <div class="collection-item-title">${escHtml(book.title || book.book_title || 'Unknown')}</div>
+      <div class="collection-item-author">${escHtml(book.author || book.book_author || '')}</div>
+    </div>
+    <div class="collection-item-right">
+      ${stars ? `<div class="collection-item-rating">${stars}</div>` : ''}
+      ${date ? `<div class="collection-item-date">${escHtml(relativeDate(date))}</div>` : ''}
+    </div>
+  </div>`;
+}
+
+function loadCollectionPage({ title, books, backPage, backParams = {} }) {
+  state._collectionBack = { page: backPage, params: backParams };
+  navigate('collection');
+  document.getElementById('collection-title').textContent = title;
+  document.getElementById('collection-back-btn').onclick = () => navigate(backPage, backParams);
+
+  const listEl = document.getElementById('collection-books-list');
+  if (!books?.length) {
+    listEl.innerHTML = '<p style="color:var(--text-muted);font-style:italic;padding:16px 0">No books here yet.</p>';
+    return;
+  }
+  listEl.innerHTML = books.map(collectionItemHTML).join('');
+  listEl.querySelectorAll('.collection-item').forEach((el, i) => {
+    el.addEventListener('click', () => {
+      const b = books[i];
+      if (b) openBook({ key: b.key || b.book_key, title: b.title || b.book_title, author: b.author || b.book_author, coverUrl: b.coverUrl || b.cover_url, year: b.year || '' });
+    });
+  });
+}
+
 // ─── USER PROFILE (public view) ───────────────────────────────────────────
 async function loadUserProfile(userId) {
   if (!sb) return;
+  state._viewingUserId = userId;
 
-  // Fetch profile info
   const { data: profile } = await sb.from('profiles').select('username, bio, avatar_url').eq('id', userId).single();
   if (!profile) return;
 
+  // Header
   const avatarEl = document.getElementById('user-avatar-letter');
-  const usernameEl = document.getElementById('user-username');
-  const bioEl = document.getElementById('user-bio');
   if (avatarEl) {
     avatarEl.innerHTML = profile.avatar_url
-      ? `<img src="${escHtml(profile.avatar_url)}" class="profile-big-avatar-img" alt="" onerror="this.remove();this.parentElement.textContent='${(profile.username||'?')[0].toUpperCase()}'"">`
+      ? `<img src="${escHtml(profile.avatar_url)}" class="profile-big-avatar-img" alt="" onerror="this.remove();this.parentElement.textContent='${(profile.username||'?')[0].toUpperCase()}'">`
       : (profile.username || '?')[0].toUpperCase();
   }
+  const usernameEl = document.getElementById('user-username');
   if (usernameEl) usernameEl.textContent = profile.username || 'User';
+  const bioEl = document.getElementById('user-bio');
   if (bioEl) { bioEl.textContent = profile.bio || ''; bioEl.style.display = profile.bio ? '' : 'none'; }
 
-  // Stats
-  const [{ count: readCount }, { count: ratedCount }] = await Promise.all([
-    sb.from('read_books').select('*', { count: 'exact', head: true }).eq('user_id', userId),
-    sb.from('ratings').select('*', { count: 'exact', head: true }).eq('user_id', userId),
+  // Fetch everything in parallel
+  const [
+    { data: favsData },
+    { data: readsData },
+    { data: ratingsData },
+    { data: listsData },
+  ] = await Promise.all([
+    sb.from('favorites').select('book_key, book_title, book_author, cover_url').eq('user_id', userId).order('position'),
+    sb.from('read_books').select('book_key, book_title, book_author, cover_url, year, date_read').eq('user_id', userId).order('created_at', { ascending: false }),
+    sb.from('ratings').select('book_key, rating').eq('user_id', userId).gt('rating', 0),
+    sb.from('lists').select('id, title, description').eq('user_id', userId).eq('is_curated', false),
   ]);
-  const statRead = document.getElementById('user-stat-read');
-  const statRated = document.getElementById('user-stat-rated');
-  if (statRead) statRead.textContent = readCount || 0;
-  if (statRated) statRated.textContent = ratedCount || 0;
 
-  // Recent reads
-  const readList = document.getElementById('user-read-list');
-  if (readList) {
-    const { data: reads } = await sb.from('read_books')
-      .select('book_key, book_title, book_author, cover_url, year, date_read')
-      .eq('user_id', userId).order('date_read', { ascending: false }).limit(10);
-    if (reads?.length) {
-      readList.innerHTML = reads.map(r => `
-        <div class="read-list-item" style="cursor:default">
-          <div class="read-book-cover-wrap">
-            ${r.cover_url ? `<img class="read-book-cover" src="${escHtml(r.cover_url)}" alt="" loading="lazy">` : '<div class="read-book-cover" style="background:var(--bg-secondary)"></div>'}
-          </div>
-          <div class="book-info">
-            <div class="book-title">${escHtml(r.book_title || 'Unknown')}</div>
-            <div class="book-author">${escHtml(r.book_author || '')}</div>
-            ${r.date_read ? `<div style="font-size:12px;color:var(--text-muted)">Read ${escHtml(r.date_read)}</div>` : ''}
-          </div>
-        </div>`).join('');
+  const favs   = favsData   || [];
+  const reads  = readsData  || [];
+  const ratings = ratingsData || [];
+  const lists  = listsData  || [];
+
+  // Stats
+  document.getElementById('user-stat-read').textContent  = reads.length;
+  document.getElementById('user-stat-rated').textContent = ratings.length;
+  document.getElementById('user-stat-favs').textContent  = favs.length;
+
+  // Stat click handlers
+  const readMap = Object.fromEntries(reads.map(r => [r.book_key, r]));
+  document.getElementById('user-stat-item-read')?.addEventListener('click', () =>
+    loadCollectionPage({ title: `${profile.username}'s Books`, books: reads.map(r => ({ ...r, key: r.book_key, title: r.book_title, author: r.book_author, coverUrl: r.cover_url, dateRead: r.date_read })), backPage: 'user', backParams: { userId } })
+  );
+  document.getElementById('user-stat-item-rated')?.addEventListener('click', () => {
+    const ratedBooks = ratings.map(r => ({ key: r.book_key, title: readMap[r.book_key]?.book_title || r.book_key, author: readMap[r.book_key]?.book_author || '', coverUrl: readMap[r.book_key]?.cover_url || null, rating: r.rating }));
+    loadCollectionPage({ title: `${profile.username}'s Rated Books`, books: ratedBooks, backPage: 'user', backParams: { userId } });
+  });
+  document.getElementById('user-stat-item-favs')?.addEventListener('click', () =>
+    loadCollectionPage({ title: `${profile.username}'s Favourites`, books: favs.map(f => ({ key: f.book_key, title: f.book_title, author: f.book_author, coverUrl: f.cover_url })), backPage: 'user', backParams: { userId } })
+  );
+
+  // Favourites grid (read-only)
+  const favsGrid = document.getElementById('user-favorites-grid');
+  if (favsGrid) {
+    if (favs.length) {
+      favsGrid.innerHTML = [0,1,2,3].map(i => {
+        const f = favs[i];
+        if (!f) return `<div class="fav-slot"><div class="fav-slot-empty" style="opacity:.3"><span>—</span></div></div>`;
+        const cover = coverUrl(f.cover_url, 'M');
+        return `<div class="fav-slot filled" style="cursor:pointer" data-key="${escHtml(f.book_key)}">
+          ${cover ? `<img src="${cover}" alt="${escHtml(f.book_title||'')}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">` : ''}
+          <div class="fav-slot-placeholder" ${cover?'style="display:none"':''}><span>${escHtml(f.book_title||'')}</span></div>
+          <div class="fav-slot-title">${escHtml(f.book_title||'')}</div>
+        </div>`;
+      }).join('');
+      favsGrid.querySelectorAll('.fav-slot.filled').forEach(slot => {
+        slot.addEventListener('click', () => {
+          const f = favs.find(x => x.book_key === slot.dataset.key);
+          if (f) openBook({ key: f.book_key, title: f.book_title, author: f.book_author, coverUrl: f.cover_url });
+        });
+      });
     } else {
-      readList.innerHTML = '<p style="color:var(--text-muted);font-style:italic;font-size:13px">No books read yet.</p>';
+      favsGrid.innerHTML = '<p style="color:var(--text-muted);font-size:13px;font-style:italic">No favourites yet.</p>';
     }
   }
 
-  // Reviews
-  const reviewList = document.getElementById('user-review-list');
-  if (reviewList) {
-    const { data: reviews } = await sb.from('reviews')
-      .select('book_title, rating, review_text, created_at')
-      .eq('user_id', userId).order('created_at', { ascending: false }).limit(5);
-    if (reviews?.length) {
-      reviewList.innerHTML = reviews.map(r => `
-        <div class="review-item">
-          <div class="review-header">
-            <span class="review-book-title">${escHtml(r.book_title || '')}</span>
-            <span class="review-stars">${'★'.repeat(r.rating || 0)}${'☆'.repeat(5 - (r.rating || 0))}</span>
-          </div>
-          ${r.review_text ? `<div class="review-text">${escHtml(r.review_text)}</div>` : ''}
-        </div>`).join('');
-    } else {
-      reviewList.innerHTML = '<p style="color:var(--text-muted);font-style:italic;font-size:13px">No reviews yet.</p>';
-    }
+  // All reads with relative dates
+  const readList = document.getElementById('user-read-list');
+  if (readList) {
+    readList.innerHTML = reads.length
+      ? reads.map(r => collectionItemHTML({ key: r.book_key, title: r.book_title, author: r.book_author, coverUrl: r.cover_url, dateRead: r.date_read })).join('')
+      : '<p style="color:var(--text-muted);font-style:italic;font-size:13px">No books read yet.</p>';
+    readList.querySelectorAll('.collection-item').forEach((el, i) => {
+      el.addEventListener('click', () => {
+        const r = reads[i];
+        if (r) openBook({ key: r.book_key, title: r.book_title, author: r.book_author, coverUrl: r.cover_url, year: r.year || '' });
+      });
+    });
+  }
+
+  // Lists
+  const listsSection = document.getElementById('user-lists-section');
+  const listsGrid = document.getElementById('user-lists-grid');
+  if (listsSection && listsGrid && lists.length) {
+    listsSection.style.display = '';
+    listsGrid.innerHTML = lists.map(l => `
+      <div class="list-card" data-list-id="${escHtml(l.id)}" style="cursor:pointer">
+        <div class="list-card-title">${escHtml(l.title)}</div>
+        ${l.description ? `<div class="list-card-desc">${escHtml(l.description)}</div>` : ''}
+      </div>`).join('');
+    listsGrid.querySelectorAll('.list-card').forEach(card => {
+      card.addEventListener('click', () => openList(card.dataset.listId));
+    });
   }
 
   document.getElementById('user-back-btn')?.addEventListener('click', () => navigate('profile'));
@@ -2951,6 +3044,21 @@ function loadProfilePage() {
   document.getElementById('stat-favs').textContent = favCount;
   document.getElementById('stat-wishlist').textContent = wishCount;
   document.getElementById('profile-username').textContent = state.username;
+
+  // Stat click → collection page
+  document.getElementById('stat-item-read')?.addEventListener('click', () =>
+    loadCollectionPage({ title: 'Books Read', books: Object.values(state.readBooks), backPage: 'profile' })
+  );
+  document.getElementById('stat-item-rated')?.addEventListener('click', () => {
+    const books = Object.entries(state.ratings)
+      .filter(([, v]) => v > 0)
+      .map(([k, v]) => ({ ...(state.readBooks[k] || state.wishlist[k] || state.favorites.find(f => f.key === k) || { key: k }), rating: v }));
+    loadCollectionPage({ title: 'Rated Books', books, backPage: 'profile' });
+  });
+  document.getElementById('stat-item-favs')?.addEventListener('click', () =>
+    loadCollectionPage({ title: 'Favourites', books: state.favorites, backPage: 'profile' })
+  );
+  document.getElementById('stat-item-wishlist')?.addEventListener('click', () => navigate('wishlist'));
 
   // Avatar display
   const avatarEl = document.getElementById('profile-avatar-letter');
