@@ -2949,10 +2949,10 @@ async function loadUserProfile(userId) {
     sb.from('lists').select('id, title, description').eq('user_id', userId).eq('is_curated', false),
   ]);
 
-  if (favsErr)    console.error('loadUserProfile favorites error:', favsErr);
-  if (readsErr)   console.error('loadUserProfile read_books error:', readsErr);
-  if (ratingsErr) console.error('loadUserProfile ratings error:', ratingsErr);
-  if (listsErr)   console.error('loadUserProfile lists error:', listsErr);
+  if (favsErr)    console.error('favorites:', favsErr.code, favsErr.message, favsErr.details, favsErr.hint);
+  if (readsErr)   console.error('read_books:', readsErr.code, readsErr.message, readsErr.details, readsErr.hint);
+  if (ratingsErr) console.error('ratings:', ratingsErr.code, ratingsErr.message, ratingsErr.details, ratingsErr.hint);
+  if (listsErr)   console.error('lists:', listsErr.code, listsErr.message, listsErr.details, listsErr.hint);
 
   const favs    = (favsData    || []).sort((a, b) => (a.position ?? 99) - (b.position ?? 99));
   const reads   = readsData   || [];
