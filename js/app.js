@@ -3,18 +3,11 @@ const SUPABASE_URL = 'https://ycejifwmvlpjewbsbrub.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljZWppZndtdmxwamV3YnNicnViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MjU4MDksImV4cCI6MjA5MTQwMTgwOX0.wCbsCkjSoSgEBniitnMVmhdiCnTxg94xnzD6K6VUUOA';
 const GOOGLE_BOOKS_KEY = 'AIzaSyAvoDMvqoWWBHLchq5WaOKkGiYDhmz5Bjw';
 
-// The UMD build sets window.supabase with a createClient function
 let sb = null;
 try {
-  if (typeof window.supabase !== 'undefined' && window.supabase.createClient) {
+  if (typeof window.supabase !== 'undefined' && window.supabase.createClient)
     sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-    console.log('Supabase connected');
-  } else {
-    console.warn('Supabase JS not loaded — running in offline mode. window.supabase =', typeof window.supabase);
-  }
-} catch (e) {
-  console.warn('Supabase init failed:', e);
-}
+} catch (e) { }
 
 // ─── STATE ──────────────────────────────────────────────────────────────
 const state = {
@@ -191,9 +184,7 @@ async function migrateLocalData(userId) {
         { onConflict: 'user_id,book_key' }
       );
     }
-  } catch (e) {
-    console.warn('Migration failed:', e);
-  }
+  } catch (e) { }
 }
 
 // ─── DATA LAYER ─────────────────────────────────────────────────────────
@@ -256,7 +247,6 @@ async function loadUserData() {
       };
     });
   } catch (e) {
-    console.warn('Wishlist table may not exist yet:', e);
     state.wishlist = {};
   }
 }
@@ -321,7 +311,6 @@ async function loadAllLists() {
     }
     return listsCache;
   } catch (e) {
-    console.warn('Failed to load lists:', e);
     return {};
   }
 }
@@ -340,7 +329,6 @@ async function loadListBooks(listId) {
     if (listsCache[listId]) listsCache[listId].books = books;
     return books;
   } catch (e) {
-    console.warn('Failed to load list books:', e);
     return [];
   }
 }
@@ -1231,7 +1219,7 @@ async function searchBooks(query, limit = 20) {
         results.push(normalizeOLBook(doc));
       }
     }
-  } catch (e) { console.warn('OL search failed:', e); }
+  } catch (e) { }
 
   // If Open Library gave few results, try Google Books as fallback
   if (results.length < 5) {
@@ -1254,7 +1242,12 @@ async function searchBooks(query, limit = 20) {
 async function searchBooksGoogle(query, limit = 20) {
   try {
     const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&key=${GOOGLE_BOOKS_KEY}&maxResults=20&printType=books&langRestrict=en&orderBy=relevance`;
-    const res = await fetch(url);
+    let res = await fetch(url);
+    if (res.status === 403) {
+      // API key restricted (dev environment) — retry without key
+      const fallback = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=20&printType=books&langRestrict=en&orderBy=relevance`;
+      res = await fetch(fallback);
+    }
     if (!res.ok) return [];
     const data = await res.json();
     return (data.items || [])
@@ -1288,6 +1281,7 @@ async function searchBooksGoogle(query, limit = 20) {
 const coverMemCache = {};
 
 async function getCachedCover(title, author) {
+  author = author || '';
   const key = (title + '||' + author).toLowerCase();
   if (coverMemCache[key]) return coverMemCache[key];
   if (!sb) return null;
@@ -1325,6 +1319,7 @@ async function saveCoverToCache(title, author, coverUrl, bookKey, year) {
 
 // ─── COVER LOOKUP: OL → Wikipedia → Google ──────────────────────────────
 async function searchBooksForList(title, author) {
+  author = author || '';
   // Check cache first
   const cached = await getCachedCover(title, author);
   if (cached) return cached;
@@ -1569,19 +1564,14 @@ async function searchUsers(query) {
     const { data, error } = await sb.from('profiles').select('id, username, bio, avatar_url')
       .ilike('username', `%${query}%`).limit(8);
     if (error) {
-      console.error('Profile search error:', error);
       // Fallback: avatar_url column might not exist yet
       const { data: fallback, error: fallbackErr } = await sb.from('profiles').select('id, username, bio')
         .ilike('username', `%${query}%`).limit(8);
-      if (fallbackErr) {
-        console.error('Profile search fallback error:', fallbackErr);
-        throw fallbackErr;
-      }
+      if (fallbackErr) throw fallbackErr;
       return (fallback || []).filter(u => u.id !== state.user?.id);
     }
     return (data || []).filter(u => u.id !== state.user?.id);
   } catch (e) {
-    console.error('searchUsers exception:', e);
     throw e;
   }
 }
@@ -1592,7 +1582,7 @@ async function getFriends() {
     const { data, error } = await sb.from('friendships')
       .select('friend_id')
       .eq('user_id', state.user.id);
-    if (error) { console.warn('Friendships fetch error:', error); return []; }
+    if (error) return [];
     if (!data?.length) return [];
     const friendIds = data.map(f => f.friend_id);
     // Try with avatar_url first, fallback without
@@ -1609,7 +1599,7 @@ async function getFriends() {
       profiles = p1;
     }
     return (profiles || []);
-  } catch (e) { console.warn('Friends error:', e); return []; }
+  } catch (e) { return []; }
 }
 
 async function addFriend(friendId) {
@@ -1760,7 +1750,7 @@ async function getBookReviews(bookKey) {
       .eq('book_key', bookKey)
       .order('created_at', { ascending: false })
       .limit(20);
-    if (error) { console.warn('Reviews fetch error:', error); return []; }
+    if (error) return [];
     if (!reviews?.length) return [];
     // Fetch usernames separately to avoid FK naming issues
     const userIds = [...new Set(reviews.map(r => r.user_id))];
@@ -1783,7 +1773,7 @@ async function getBookReviews(bookKey) {
       username: profileMap[r.user_id]?.username || 'Anonymous',
       avatar_url: profileMap[r.user_id]?.avatar_url || null,
     }));
-  } catch (e) { console.warn('Reviews error:', e); return []; }
+  } catch (e) { return []; }
 }
 
 async function submitReview(bookKey, bookTitle, rating, reviewText) {
@@ -2897,7 +2887,6 @@ function collectionItemHTML(book) {
 }
 
 function loadCollectionPage({ title, books, backPage, backParams = {} }) {
-  state._collectionBack = { page: backPage, params: backParams };
   navigate('collection');
   document.getElementById('collection-title').textContent = title;
   document.getElementById('collection-back-btn').onclick = () => navigate(backPage, backParams);
@@ -2919,7 +2908,6 @@ function loadCollectionPage({ title, books, backPage, backParams = {} }) {
 // ─── USER PROFILE (public view) ───────────────────────────────────────────
 async function loadUserProfile(userId) {
   if (!sb) return;
-  state._viewingUserId = userId;
 
   const { data: profile } = await sb.from('profiles').select('username, bio, avatar_url').eq('id', userId).single();
   if (!profile) return;
@@ -2943,16 +2931,11 @@ async function loadUserProfile(userId) {
     { data: ratingsData, error: ratingsErr },
     { data: listsData,   error: listsErr },
   ] = await Promise.all([
-    sb.from('favorites').select('book_key, book_title, book_author, cover_url, position').eq('user_id', userId),
-    sb.from('read_books').select('book_key, book_title, book_author, cover_url, year, date_read').eq('user_id', userId),
+    sb.from('favorites').select('book_key, title, author, cover_url, position').eq('user_id', userId),
+    sb.from('read_books').select('book_key, title, author, cover_url, year, date_read').eq('user_id', userId),
     sb.from('ratings').select('book_key, rating, book_title, book_author, cover_url').eq('user_id', userId).gt('rating', 0),
     sb.from('lists').select('id, title, description').eq('user_id', userId).eq('is_curated', false),
   ]);
-
-  if (favsErr)    console.error('favorites:', favsErr.code, favsErr.message, favsErr.details, favsErr.hint);
-  if (readsErr)   console.error('read_books:', readsErr.code, readsErr.message, readsErr.details, readsErr.hint);
-  if (ratingsErr) console.error('ratings:', ratingsErr.code, ratingsErr.message, ratingsErr.details, ratingsErr.hint);
-  if (listsErr)   console.error('lists:', listsErr.code, listsErr.message, listsErr.details, listsErr.hint);
 
   const favs    = (favsData    || []).sort((a, b) => (a.position ?? 99) - (b.position ?? 99));
   const reads   = readsData   || [];
@@ -2972,21 +2955,21 @@ async function loadUserProfile(userId) {
     const meta = readMap[r.book_key] || favMap[r.book_key];
     return {
       key:      r.book_key,
-      title:    r.book_title   || meta?.book_title   || 'Unknown Book',
-      author:   r.book_author  || meta?.book_author  || '',
+      title:    r.book_title   || meta?.title   || 'Unknown Book',
+      author:   r.book_author  || meta?.author  || '',
       coverUrl: r.cover_url    || meta?.cover_url    || null,
       rating:   r.rating,
     };
   }
 
   document.getElementById('user-stat-item-read')?.addEventListener('click', () =>
-    loadCollectionPage({ title: `${profile.username}'s Books`, books: reads.map(r => ({ ...r, key: r.book_key, title: r.book_title, author: r.book_author, coverUrl: r.cover_url, dateRead: r.date_read })), backPage: 'user', backParams: { userId } })
+    loadCollectionPage({ title: `${profile.username}'s Books`, books: reads.map(r => ({ ...r, key: r.book_key, coverUrl: r.cover_url, dateRead: r.date_read })), backPage: 'user', backParams: { userId } })
   );
   document.getElementById('user-stat-item-rated')?.addEventListener('click', () =>
     loadCollectionPage({ title: `${profile.username}'s Rated Books`, books: ratings.map(resolveRatedBook), backPage: 'user', backParams: { userId } })
   );
   document.getElementById('user-stat-item-favs')?.addEventListener('click', () =>
-    loadCollectionPage({ title: `${profile.username}'s Favourites`, books: favs.map(f => ({ key: f.book_key, title: f.book_title, author: f.book_author, coverUrl: f.cover_url })), backPage: 'user', backParams: { userId } })
+    loadCollectionPage({ title: `${profile.username}'s Favourites`, books: favs.map(f => ({ key: f.book_key, title: f.title, author: f.author, coverUrl: f.cover_url })), backPage: 'user', backParams: { userId } })
   );
 
   // Favourites grid (read-only)
@@ -2998,15 +2981,15 @@ async function loadUserProfile(userId) {
         if (!f) return `<div class="fav-slot"><div class="fav-slot-empty" style="opacity:.3"><span>—</span></div></div>`;
         const cover = coverUrl(f.cover_url, 'M');
         return `<div class="fav-slot filled" style="cursor:pointer" data-key="${escHtml(f.book_key)}">
-          ${cover ? `<img src="${cover}" alt="${escHtml(f.book_title||'')}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">` : ''}
-          <div class="fav-slot-placeholder" ${cover?'style="display:none"':''}><span>${escHtml(f.book_title||'')}</span></div>
-          <div class="fav-slot-title">${escHtml(f.book_title||'')}</div>
+          ${cover ? `<img src="${cover}" alt="${escHtml(f.title||'')}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">` : ''}
+          <div class="fav-slot-placeholder" ${cover?'style="display:none"':''}><span>${escHtml(f.title||'')}</span></div>
+          <div class="fav-slot-title">${escHtml(f.title||'')}</div>
         </div>`;
       }).join('');
       favsGrid.querySelectorAll('.fav-slot.filled').forEach(slot => {
         slot.addEventListener('click', () => {
           const f = favs.find(x => x.book_key === slot.dataset.key);
-          if (f) openBook({ key: f.book_key, title: f.book_title, author: f.book_author, coverUrl: f.cover_url });
+          if (f) openBook({ key: f.book_key, title: f.title, author: f.author, coverUrl: f.cover_url });
         });
       });
     } else {
@@ -3018,12 +3001,12 @@ async function loadUserProfile(userId) {
   const readList = document.getElementById('user-read-list');
   if (readList) {
     readList.innerHTML = reads.length
-      ? reads.map(r => collectionItemHTML({ key: r.book_key, title: r.book_title, author: r.book_author, coverUrl: r.cover_url, dateRead: r.date_read })).join('')
+      ? reads.map(r => collectionItemHTML({ key: r.book_key, title: r.title, author: r.author, coverUrl: r.cover_url, dateRead: r.date_read })).join('')
       : '<p style="color:var(--text-muted);font-style:italic;font-size:13px">No books read yet.</p>';
     readList.querySelectorAll('.collection-item').forEach((el, i) => {
       el.addEventListener('click', () => {
         const r = reads[i];
-        if (r) openBook({ key: r.book_key, title: r.book_title, author: r.book_author, coverUrl: r.cover_url, year: r.year || '' });
+        if (r) openBook({ key: r.book_key, title: r.title, author: r.author, coverUrl: r.cover_url, year: r.year || '' });
       });
     });
   }
@@ -3310,7 +3293,7 @@ async function toggleWishlist(book) {
     showToast(`Removed "${book.title}" from Read Later`);
     if (state.user) {
       try { await sb.from('wishlist').delete().eq('user_id', state.user.id).eq('book_key', key); }
-      catch (e) { console.warn('Wishlist delete failed (table may not exist):', e); }
+      catch (e) { }
     }
   } else {
     const dateAdded = new Date().toISOString();
@@ -3322,7 +3305,7 @@ async function toggleWishlist(book) {
           user_id: state.user.id, book_key: key, title: book.title, author: book.author,
           cover_url: book.coverUrl, year: book.year, date_added: dateAdded,
         }, { onConflict: 'user_id,book_key' });
-      } catch (e) { console.warn('Wishlist insert failed (table may not exist):', e); }
+      } catch (e) { }
     }
   }
   save();
@@ -3518,7 +3501,6 @@ async function searchBooksForListCreation(query) {
       });
     });
   } catch (e) {
-    console.error('List search failed:', e);
     resultsEl.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:8px 0">Search failed. Try a different query.</div>`;
   }
 }
