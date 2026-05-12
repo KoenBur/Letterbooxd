@@ -1219,10 +1219,10 @@ async function searchBooks(query, limit = 20) {
   return results.slice(0, limit);
 }
 
-// Google Books fallback search
-async function searchBooksGoogle(query, limit = 20) {
+// Google Books fallback search — startIndex enables pagination (40 results per page max)
+async function searchBooksGoogle(query, limit = 20, startIndex = 0) {
   try {
-    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=20&printType=books&langRestrict=en&orderBy=relevance`;
+    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=40&printType=books&langRestrict=en&orderBy=relevance&startIndex=${startIndex}`;
     const res = await fetch(url);
     if (!res.ok) return [];
     const data = await res.json();
@@ -1376,23 +1376,51 @@ async function searchBooksForList(title, author) {
   return book;
 }
 
-async function getPopularBooks(subject, limit = 16) {
-  // Use Open Library subjects API
-  try {
-    const url = `${OL}/subjects/${encodeURIComponent(subject.toLowerCase())}.json?limit=${limit}`;
-    const res = await fetch(url);
-    if (res.ok) {
-      const data = await res.json();
-      return (data.works || []).map(w => ({
-        key: w.key?.replace('/works/', '') || w.title,
-        title: w.title || 'Unknown',
-        author: w.authors?.[0]?.name || 'Unknown Author',
-        coverUrl: w.cover_id ? `https://covers.openlibrary.org/b/id/${w.cover_id}-L.jpg` : null,
-        year: w.first_publish_year?.toString() || '',
-      }));
-    }
-  } catch { /* fall through */ }
-  return [];
+const GENRE_SUBJECTS = {
+  'fantasy':           'fantasy',
+  'thriller':          'thriller',
+  'romance':           'romance',
+  'biography':         'biography',
+  'history':           'history',
+  'philosophy':        'philosophy',
+  'self-help':         'self_help',
+  'horror':            'horror',
+  'comics':            'comics',
+  'classic literature':'classics',
+  'science fiction':   'science_fiction',
+  'popular books':     'bestsellers',
+};
+
+async function fetchOLSubject(subject, limit = 100, offset = 0) {
+  const url = `${OL}/search.json?subject=${encodeURIComponent(subject)}&sort=editions&limit=${limit}&offset=${offset}`;
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (data.docs || []).filter(d => d.title).map(normalizeOLBook);
+}
+
+function withTimeout(promise, ms) {
+  return Promise.race([promise, new Promise(resolve => setTimeout(() => resolve([]), ms))]);
+}
+
+async function fetchOLTrending(limit = 100) {
+  const url = `${OL}/trending/monthly.json?limit=${limit}`;
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (data.works || []).filter(w => w.title).map(w => ({
+    key: w.key?.replace('/works/', '') || w.title,
+    title: w.title,
+    author: (w.author_name || [])[0] || 'Unknown Author',
+    coverUrl: w.cover_id ? `https://covers.openlibrary.org/b/id/${w.cover_id}-L.jpg` : null,
+    year: w.first_publish_year?.toString() || '',
+    pages: null,
+    description: '',
+    categories: [],
+    language: 'eng',
+    isbn: null,
+    olKey: w.key || null,
+  }));
 }
 
 async function getCuratedShelf(titles) {
@@ -1786,7 +1814,10 @@ function navigate(page, params = {}) {
   if (page === 'home') {
     loadHomePage();
   } else if (page === 'search') {
-    if (params.query) {
+    if (params.genre) {
+      document.getElementById('main-search-input').value = params.genre;
+      doGenreSearch(params.genre);
+    } else if (params.query) {
       document.getElementById('main-search-input').value = params.query;
       doSearch(params.query);
     }
@@ -2430,7 +2461,7 @@ function bindTabs() {
   // Genre tags are clickable — search for that genre
   document.querySelectorAll('.genre-tag').forEach(tag => {
     tag.addEventListener('click', () => {
-      navigate('search', { query: tag.dataset.genre });
+      navigate('search', { genre: tag.dataset.genre });
     });
   });
 }
@@ -2724,40 +2755,72 @@ async function fetchAndRenderDescription(key) {
 
 // ─── SEARCH ───────────────────────────────────────────────────────────────
 async function doGenreSearch(genre) {
-  document.getElementById('search-results-info').textContent = 'Searching…';
-  renderGridSkeletons('search-results-grid', 12);
-  try {
-    // Use Open Library subjects API for genre browsing
-    const subject = genre.toLowerCase().replace(/\s+/g, '_');
-    const url = `${OL}/subjects/${encodeURIComponent(subject)}.json?limit=24`;
-    const res = await fetch(url);
-    let results = [];
-    if (res.ok) {
-      const data = await res.json();
-      results = (data.works || []).map(w => ({
-        key: w.key?.replace('/works/', '') || w.title,
-        title: w.title || 'Unknown',
-        author: w.authors?.[0]?.name || 'Unknown Author',
-        coverUrl: w.cover_id ? `https://covers.openlibrary.org/b/id/${w.cover_id}-L.jpg` : null,
-        year: w.first_publish_year?.toString() || '',
-        pages: null, description: '', categories: [genre],
-      }));
-    }
-    // Fallback to general search if subjects returned little
-    if (results.length < 5) {
-      const fallback = await searchBooks(genre, 24);
-      const seenTitles = new Set(results.map(r => normalizeText(r.title)));
-      for (const b of fallback) {
-        if (!seenTitles.has(normalizeText(b.title))) results.push(b);
+  const subject = GENRE_SUBJECTS[genre.toLowerCase()] || genre.toLowerCase().replace(/[\s-]+/g, '_');
+  const grid = document.getElementById('search-results-grid');
+  const info = document.getElementById('search-results-info');
+  info.textContent = 'Searching…';
+  renderGridSkeletons('search-results-grid', 24);
+
+  const seenTitles = new Set();
+  state.searchResults = [];
+  state.searchQuery = genre;
+
+  grid.onclick = e => {
+    const btn = e.target.closest('.overlay-btn');
+    if (btn) {
+      if (btn.classList.contains('mark-read'))
+        toggleRead(btn.dataset.key, btn.dataset.title, btn.dataset.author, btn.dataset.cover, btn.dataset.year);
+      else if (btn.classList.contains('rate-btn')) {
+        const book = state.searchResults.find(b => b.key === btn.dataset.key);
+        if (book) openRatingModal(book);
       }
+      return;
     }
-    state.searchResults = results;
-    state.searchQuery = genre;
-    document.getElementById('search-results-info').textContent = `${results.length} results for "${genre}"`;
-    renderBookGrid('search-results-grid', results);
-  } catch (e) {
-    document.getElementById('search-results-info').textContent = 'Search failed. Try again.';
-    showToast('Search failed', 'error');
+    const card = e.target.closest('.book-card');
+    if (card) {
+      const book = state.searchResults.find(b => b.key === card.dataset.key);
+      if (book) openBook(book);
+    }
+  };
+
+  function applyBatch(books) {
+    const newBooks = books.filter(b => {
+      const n = normalizeText(b.title);
+      if (seenTitles.has(n)) return false;
+      seenTitles.add(n);
+      return true;
+    });
+    if (!newBooks.length) return;
+    state.searchResults.push(...newBooks);
+    info.textContent = `${state.searchResults.length} results for "${genre}"`;
+    if (grid.querySelector('.skeleton')) {
+      grid.innerHTML = newBooks.map(bookCardHTML).join('');
+    } else {
+      const frag = document.createDocumentFragment();
+      newBooks.forEach(book => {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = bookCardHTML(book);
+        frag.appendChild(tmp.firstElementChild);
+      });
+      grid.appendChild(frag);
+    }
+  }
+
+  const isPopular = genre.toLowerCase() === 'popular books';
+  const gbQuery = isPopular ? 'bestselling fiction' : `subject:${genre}`;
+  const fetches = [
+    ...Array.from({ length: 4 }, (_, i) =>
+      searchBooksGoogle(gbQuery, 40, i * 40).then(applyBatch).catch(() => {})),
+    ...(isPopular
+      ? [withTimeout(fetchOLTrending(100), 6000).then(applyBatch).catch(() => {})]
+      : Array.from({ length: 3 }, (_, i) =>
+          withTimeout(fetchOLSubject(subject, 100, i * 100), 6000).then(applyBatch).catch(() => {}))),
+  ];
+  await Promise.allSettled(fetches);
+
+  if (!state.searchResults.length) {
+    grid.innerHTML = '<div class="empty-state"><p>No books found.</p></div>';
+    info.textContent = `No results for "${genre}"`;
   }
 }
 
