@@ -1,7 +1,6 @@
 // ─── SUPABASE ───────────────────────────────────────────────────────────
 const SUPABASE_URL = 'https://ycejifwmvlpjewbsbrub.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InljZWppZndtdmxwamV3YnNicnViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MjU4MDksImV4cCI6MjA5MTQwMTgwOX0.wCbsCkjSoSgEBniitnMVmhdiCnTxg94xnzD6K6VUUOA';
-const GOOGLE_BOOKS_KEY = 'AIzaSyAvoDMvqoWWBHLchq5WaOKkGiYDhmz5Bjw';
 
 let sb = null;
 try {
@@ -1185,69 +1184,46 @@ async function migrateBookKey(oldKey, newKey) {
   }
 }
 
+async function fetchFromOL(trimmed, byMatch, limit) {
+  let olUrl;
+  if (byMatch) {
+    olUrl = `${OL}/search.json?title=${encodeURIComponent(byMatch[1].trim())}&author=${encodeURIComponent(byMatch[2].trim())}&limit=${limit}&language=eng`;
+  } else {
+    olUrl = `${OL}/search.json?q=${encodeURIComponent(trimmed)}&limit=${limit * 2}&language=eng`;
+  }
+  const res = await fetch(olUrl);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return (data.docs || []).filter(d => d.title).map(normalizeOLBook);
+}
+
 async function searchBooks(query, limit = 20) {
   const trimmed = query.trim();
   if (!trimmed) return [];
-  const seenWorkKeys = new Set();
-  const seenSimple = new Set();
-  const seenTitles = new Set();
-  let results = [];
-
-  // Parse "title by author" patterns
   const byMatch = trimmed.match(/^(.+?)\s+by\s+(.+)$/i);
 
-  try {
-    // Build Open Library search URL
-    let olUrl;
-    if (byMatch) {
-      olUrl = `${OL}/search.json?title=${encodeURIComponent(byMatch[1].trim())}&author=${encodeURIComponent(byMatch[2].trim())}&limit=${limit}&language=eng`;
-    } else {
-      olUrl = `${OL}/search.json?q=${encodeURIComponent(trimmed)}&limit=${limit * 2}&language=eng`;
-    }
-    const res = await fetch(olUrl);
-    if (res.ok) {
-      const data = await res.json();
-      for (const doc of (data.docs || [])) {
-        if (!doc.title) continue;
-        const workKey = doc.key;
-        const simpleKey = normalizeText(stripSubtitle(doc.title)) + '|' + normalizeText(doc.author_name?.[0] || '');
-        const normTitle = normalizeText(doc.title);
-        if ((workKey && seenWorkKeys.has(workKey)) || seenSimple.has(simpleKey) || seenTitles.has(normTitle)) continue;
-        if (workKey) seenWorkKeys.add(workKey);
-        seenSimple.add(simpleKey);
-        seenTitles.add(normTitle);
-        results.push(normalizeOLBook(doc));
-      }
-    }
-  } catch (e) { }
+  const [olResult, gbResult] = await Promise.allSettled([
+    fetchFromOL(trimmed, byMatch, limit),
+    searchBooksGoogle(trimmed, limit),
+  ]);
 
-  // If Open Library gave few results, try Google Books as fallback
-  if (results.length < 5) {
-    try {
-      const gResults = await searchBooksGoogle(trimmed, limit);
-      for (const book of gResults) {
-        const normTitle = normalizeText(book.title);
-        if (!seenTitles.has(normTitle)) {
-          seenTitles.add(normTitle);
-          results.push(book);
-        }
-      }
-    } catch { /* ignore */ }
+  const seenTitles = new Set();
+  const results = [];
+  for (const book of [...(olResult.value || []), ...(gbResult.value || [])]) {
+    const normTitle = normalizeText(book.title);
+    if (!seenTitles.has(normTitle)) {
+      seenTitles.add(normTitle);
+      results.push(book);
+    }
   }
-
   return results.slice(0, limit);
 }
 
 // Google Books fallback search
 async function searchBooksGoogle(query, limit = 20) {
   try {
-    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&key=${GOOGLE_BOOKS_KEY}&maxResults=20&printType=books&langRestrict=en&orderBy=relevance`;
-    let res = await fetch(url);
-    if (res.status === 403) {
-      // API key restricted (dev environment) — retry without key
-      const fallback = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=20&printType=books&langRestrict=en&orderBy=relevance`;
-      res = await fetch(fallback);
-    }
+    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=20&printType=books&langRestrict=en&orderBy=relevance`;
+    const res = await fetch(url);
     if (!res.ok) return [];
     const data = await res.json();
     return (data.items || [])
@@ -1360,7 +1336,7 @@ async function searchBooksForList(title, author) {
   if (!book?.coverUrl) {
     try {
       const q = `intitle:"${title}" inauthor:"${author}"`;
-      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=5&printType=books&langRestrict=en`;
+      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=5&printType=books&langRestrict=en`;
       const res = await fetch(url);
       if (res.ok && res.status !== 429) {
         const data = await res.json();
@@ -1526,7 +1502,7 @@ async function adminFindCoverOptions(title, author) {
     // 3. Google Books — multiple results
     (async () => {
       const q = `intitle:"${title}" inauthor:"${author}"`;
-      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&key=${GOOGLE_BOOKS_KEY}&maxResults=8&printType=books&langRestrict=en`;
+      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=8&printType=books&langRestrict=en`;
       const res = await fetch(url);
       if (!res.ok) return [];
       const data = await res.json();
@@ -2702,7 +2678,7 @@ function bindReviewForm(book) {
 async function fetchBookDetails(key) {
   // Try Google Books API first
   try {
-    const url = `https://www.googleapis.com/books/v1/volumes/${encodeURIComponent(key)}?key=${GOOGLE_BOOKS_KEY}`;
+    const url = `https://www.googleapis.com/books/v1/volumes/${encodeURIComponent(key)}`;
     const res = await fetch(url);
     if (res.ok) {
       const data = await res.json();
