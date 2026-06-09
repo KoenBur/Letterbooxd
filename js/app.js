@@ -1187,9 +1187,9 @@ async function migrateBookKey(oldKey, newKey) {
 async function fetchFromOL(trimmed, byMatch, limit) {
   let olUrl;
   if (byMatch) {
-    olUrl = `${OL}/search.json?title=${encodeURIComponent(byMatch[1].trim())}&author=${encodeURIComponent(byMatch[2].trim())}&limit=${limit}&language=eng`;
+    olUrl = `${OL}/search.json?title=${encodeURIComponent(byMatch[1].trim())}&author=${encodeURIComponent(byMatch[2].trim())}&limit=${limit}`;
   } else {
-    olUrl = `${OL}/search.json?q=${encodeURIComponent(trimmed)}&limit=${limit * 2}&language=eng`;
+    olUrl = `${OL}/search.json?q=${encodeURIComponent(trimmed)}&limit=${limit * 2}`;
   }
   const res = await fetch(olUrl);
   if (!res.ok) return [];
@@ -1230,7 +1230,6 @@ async function searchBooksGoogle(query, limit = 20, startIndex = 0) {
       .filter(item => {
         const info = item.volumeInfo || {};
         if (info.printType && info.printType !== 'BOOK') return false;
-        if (info.language && info.language !== 'en') return false;
         return !!info.title;
       })
       .slice(0, limit)
