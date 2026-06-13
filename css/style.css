@@ -66,6 +66,18 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* the room itself: a warm ceiling lamp overhead, shadow gathering at the floor */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 520px at 50% -10%, rgba(232, 182, 75, 0.07), transparent 60%),
+    radial-gradient(1300px 900px at 50% 118%, rgba(0, 0, 0, 0.45), transparent 60%);
+}
+
 ::selection { background: var(--accent); color: #1d1407; }
 
 /* visible, consistent keyboard focus everywhere */
@@ -77,14 +89,28 @@ body {
 
 /* ─── HEADER ─────────────────────────────────────────────── */
 header {
-  background: rgba(24, 19, 14, 0.86);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
   z-index: 100;
   height: var(--header-height);
+  background: rgba(24, 19, 14, 0.86);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+/* thin gilt line catching the light along the counter edge */
+header::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg,
+    transparent,
+    rgba(232, 182, 75, 0.45) 18%,
+    rgba(232, 182, 75, 0.55) 50%,
+    rgba(232, 182, 75, 0.45) 82%,
+    transparent);
+  opacity: 0.6;
 }
 
 .header-inner {
@@ -186,47 +212,47 @@ nav a.active::after, nav a:hover::after { transform: scaleX(1); }
 .page.active { display: block; animation: pageIn 0.3s ease; }
 @keyframes pageIn { from { opacity: 0; } to { opacity: 1; } }
 
-main { max-width: 1200px; margin: 0 auto; padding: 36px 20px 72px; }
+main { max-width: 1200px; margin: 0 auto; padding: 20px 20px 40px; }
 
-/* ─── HERO — lamplight over the reading desk ─────────────── */
+/* ─── HERO — entering the stacks ─────────────────────────── */
 .hero {
   position: relative;
-  background: var(--bg-primary);
   border-bottom: 1px solid var(--border);
-  padding: 76px 0 64px;
+  padding: 24px 0 26px;
   margin-bottom: 44px;
   overflow: hidden;
+  background-color: var(--bg-primary);
+  background-image:
+    linear-gradient(90deg,
+      var(--shelf-wood-dark) 0%,
+      var(--shelf-wood-mid) 22%,
+      var(--shelf-wood-light) 50%,
+      var(--shelf-wood-mid) 78%,
+      var(--shelf-wood-dark) 100%),
+    linear-gradient(rgba(16, 12, 8, 0.72), rgba(16, 12, 8, 0.72)),
+    url('https://ycejifwmvlpjewbsbrub.supabase.co/storage/v1/object/public/Public_Image/Bookcase.avif');
+  background-repeat: no-repeat, no-repeat, repeat;
+  background-position: bottom, center, center;
+  background-size: 100% 6px, 100% 100%, auto;
 }
-/* the lamp glow: one warm pool of light, nothing else */
+/* the lamp: one warm pool of light over the reading desk, upper left */
 .hero::before {
   content: '';
   position: absolute;
-  top: -340px;
-  left: 4%;
-  width: 760px;
-  height: 660px;
+  top: -360px;
+  left: 2%;
+  width: 820px;
+  height: 720px;
+  z-index: 1;
   background: radial-gradient(ellipse at center,
-    rgba(222, 168, 70, 0.16) 0%,
-    rgba(222, 168, 70, 0.06) 38%,
+    rgba(232, 182, 75, 0.17) 0%,
+    rgba(232, 182, 75, 0.06) 38%,
     transparent 68%);
   pointer-events: none;
 }
-/* faint horizon line of shelved spines */
-.hero::after {
-  content: '';
-  position: absolute;
-  left: 0; right: 0; bottom: 0;
-  height: 5px;
-  background: repeating-linear-gradient(90deg,
-    var(--shelf-wood-light) 0 14px,
-    var(--shelf-wood-dark) 14px 16px,
-    var(--shelf-wood-mid) 16px 38px,
-    var(--shelf-wood-dark) 38px 40px,
-    var(--shelf-wood) 40px 58px,
-    var(--shelf-wood-dark) 58px 60px);
-  opacity: 0.85;
-}
-.hero-inner { position: relative; max-width: 1200px; margin: 0 auto; padding: 0 20px; }
+/* bookcase image is now in the background — no fake spine overlay needed */
+.hero::after { content: none; }
+.hero-inner { position: relative; z-index: 2; max-width: 1200px; margin: 0 auto; padding: 0 20px; display: flex; align-items: center; justify-content: space-between; gap: 40px; }
 .hero h1 {
   font-family: var(--font-display);
   font-variation-settings: 'opsz' 120;
@@ -235,7 +261,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 36px 20px 72px; }
   color: var(--text-primary);
   line-height: 1.12;
   letter-spacing: -0.015em;
-  margin-bottom: 16px;
+  margin-bottom: 0;
   max-width: 16em;
 }
 .hero h1 em {
@@ -250,11 +276,11 @@ main { max-width: 1200px; margin: 0 auto; padding: 36px 20px 72px; }
   max-width: 480px;
   margin-bottom: 30px;
 }
-.hero-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.hero-actions { display: flex; flex-direction: column; gap: 12px; align-items: flex-end; flex-shrink: 0; }
 
 /* ─── BUTTONS ────────────────────────────────────────────── */
 .btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  display: inline-flex; align-items: right; justify-content: right; gap: 6px;
   padding: 10px 22px;
   border-radius: 999px;
   font-size: 13px; font-weight: 700; font-family: inherit;
@@ -313,12 +339,31 @@ main { max-width: 1200px; margin: 0 auto; padding: 36px 20px 72px; }
 .section-header a:hover { color: var(--accent-bright); text-decoration: underline; text-underline-offset: 3px; }
 
 /* ─── BOOKSHELF (the signature) ──────────────────────────── */
-.shelf-section { margin-bottom: 58px; }
+.shelf-section { margin-bottom: 20px; }
 
 .bookshelf-wrap {
   position: relative;
   display: flex;
   align-items: stretch;
+  border-radius: 4px 4px 0 0;
+  background:
+    linear-gradient(180deg, rgba(232, 182, 75, 0.05), transparent 22%),
+    linear-gradient(180deg, #221a12 0%, #181109 100%);
+  box-shadow: inset 0 0 38px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 225, 175, 0.05);
+}
+/* extend the shelf plank across the full width, including under the bookends */
+.bookshelf-wrap::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 18px;
+  z-index: 6;
+  pointer-events: none;
+  border-radius: 2px;
+  background:
+    linear-gradient(to bottom, rgba(255, 215, 150, 0.12) 0%, transparent 40%),
+    linear-gradient(180deg, var(--shelf-wood-light), var(--shelf-wood-mid) 50%, var(--shelf-edge));
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 225, 175, 0.09);
 }
 
 .bookshelf {
@@ -440,33 +485,27 @@ main { max-width: 1200px; margin: 0 auto; padding: 36px 20px 72px; }
     radial-gradient(ellipse at 82% 60%, rgba(0,0,0,0.13) 0%, rgba(0,0,0,0.05) 12%, transparent 24%);
 }
 
-/* shelf arrows */
+/* shelf arrows — brass bookend ornaments, sit beside the shelf in flex flow */
 .shelf-arrow {
-  position: absolute;
-  top: 50%;
-  transform: translateY(-60%);
+  flex-shrink: 0;
+  align-self: flex-end;
+  margin-bottom: 18px;
+  margin-left: 12px;
+  margin-right: 12px;
   z-index: 10;
-  width: 38px;
-  height: 38px;
-  background: rgba(22, 17, 12, 0.88);
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
-  color: var(--text-primary);
-  font-size: 24px;
-  line-height: 1;
+  background: transparent;
+  border: none;
+  padding: 0;
   cursor: pointer;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 0.15s, opacity 0.15s, border-color 0.15s, color 0.15s;
-  opacity: 0;
-  backdrop-filter: blur(4px);
+  align-items: flex-end;
 }
-.bookshelf-wrap:hover .shelf-arrow,
-.shelf-arrow:focus-visible { opacity: 1; }
-.shelf-arrow:hover { background: var(--bg-hover); border-color: var(--accent); color: var(--accent-bright); }
-.shelf-arrow-left { left: -19px; }
-.shelf-arrow-right { right: -19px; }
+.bookend-img {
+  height: 120px;
+  width: 90px;
+  display: block;
+}
+.shelf-arrow-right { transform: scaleX(-1); }
 
 /* hide book-info text below covers on shelf */
 .shelf-track .book-info { display: none; }
@@ -568,72 +607,154 @@ main { max-width: 1200px; margin: 0 auto; padding: 36px 20px 72px; }
 .star { font-size: 10px; color: var(--star-empty); }
 .star.filled { color: var(--star-filled); }
 
-/* ─── LISTS PAGE ─────────────────────────────────────────── */
+/* ─── LISTS PAGE — a wall of bookcases ──────────────────── */
 .lists-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 24px;
+  grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
+  gap: 32px 26px;
+  align-items: start;
 }
 
+/* Each list is its own little case: a wood crown on top, a lit shelf of
+   standing books, and a brass nameplate below. */
 .list-card {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  overflow: hidden;
+  position: relative;
   cursor: pointer;
-  box-shadow: var(--shadow-card);
-  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+  border-radius: 5px 5px 4px 4px;
+  padding-top: 13px;                       /* clearance for the crown */
+  background: linear-gradient(180deg, #241c13 0%, #18120b 100%);
+  box-shadow:
+    var(--shadow-card),
+    inset 0 0 0 1px var(--border),
+    inset 0 0 34px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  transition: transform 0.24s cubic-bezier(0.2, 0.7, 0.3, 1.1), box-shadow 0.24s ease;
+}
+/* crown moulding — a wood beam across the top of the case */
+.list-card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 13px;
+  z-index: 3;
+  background:
+    linear-gradient(to bottom, rgba(255, 215, 150, 0.14) 0%, transparent 36%),
+    linear-gradient(180deg, var(--shelf-wood-light), var(--shelf-wood-mid) 55%, var(--shelf-edge));
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.55), inset 0 -1px 0 rgba(0, 0, 0, 0.4);
+}
+/* warm lamp wash spilling into the case on hover */
+.list-card::after {
+  content: "";
+  position: absolute;
+  inset: 13px 0 0 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(130% 70% at 50% -12%, var(--accent-glow), transparent 58%);
+  opacity: 0;
+  transition: opacity 0.24s ease;
 }
 .list-card:hover {
-  border-color: var(--accent);
-  transform: translateY(-3px);
-  box-shadow: var(--shadow-lift);
+  transform: translateY(-6px);
+  box-shadow:
+    var(--shadow-lift),
+    inset 0 0 0 1px rgba(232, 182, 75, 0.55),
+    inset 0 0 34px rgba(0, 0, 0, 0.4),
+    0 0 44px rgba(232, 182, 75, 0.1);
 }
+.list-card:hover::after { opacity: 1; }
 
+/* the shelf of book covers standing inside the case */
 .list-card-books {
+  position: relative;
+  z-index: 2;
   display: flex;
-  height: 124px;
-  overflow: hidden;
-  background: var(--bg-primary);
+  align-items: stretch;
+  height: 132px;
+  margin: 16px 13px 0;
+  border-radius: 2px 2px 0 0;
+  background: #0f0b07;
+  box-shadow: inset 3px 0 8px rgba(0, 0, 0, 0.55), inset -3px 0 8px rgba(0, 0, 0, 0.55);
 }
-
+/* the plank the books rest on */
+.list-card-books::after {
+  content: "";
+  position: absolute;
+  left: -3px; right: -3px; bottom: -9px;
+  height: 9px;
+  z-index: 4;
+  border-radius: 2px;
+  background:
+    linear-gradient(to bottom, rgba(255, 215, 150, 0.12) 0%, transparent 40%),
+    linear-gradient(180deg, var(--shelf-wood-light), var(--shelf-wood-mid) 50%, var(--shelf-edge));
+  box-shadow: 0 5px 12px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 225, 175, 0.08);
+}
 .list-card-books img {
   flex: 1;
+  min-width: 0;
   object-fit: cover;
-  border-right: 2px solid var(--bg-primary);
+  border-right: 2px solid #0f0b07;          /* dark spine gap */
 }
-
+.list-card-books img:last-child { border-right: none; }
 .list-card-books .list-placeholder-cover {
   flex: 1;
   background: linear-gradient(135deg, #2e251a, #1f1812);
-  border-right: 2px solid var(--bg-primary);
+  border-right: 2px solid #0f0b07;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
+  font-size: 22px;
+  opacity: 0.8;
 }
+.list-card-books .list-placeholder-cover:last-child { border-right: none; }
 
-.list-card-info { padding: 18px; }
+/* brass nameplate footer */
+.list-card-info {
+  position: relative;
+  z-index: 2;
+  margin-top: 18px;
+  padding: 16px 18px 18px;
+  background: linear-gradient(180deg, #1d1610, #15100a);
+  border-top: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 rgba(232, 182, 75, 0.14);
+}
 .list-card-title {
   font-family: var(--font-display);
   font-variation-settings: 'opsz' 40;
-  font-size: 17px; font-weight: 600;
-  color: var(--text-primary); margin-bottom: 5px;
+  font-size: 18px; font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text-primary); margin-bottom: 6px;
 }
 .list-card-meta {
   font-family: var(--font-mono);
   font-size: 10px; color: var(--accent);
-  margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.1em;
+  margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.12em;
 }
 .list-card-desc { font-size: 13px; color: var(--text-muted); line-height: 1.55; }
+
+/* bare variant (title + desc only, no shelf — used on user profiles):
+   a small labelled case. Direct-child selectors keep it working without :has(). */
+.list-card > .list-card-title { padding: 22px 18px 0; }
+.list-card > .list-card-desc { padding: 6px 18px 20px; margin: 0; }
 
 /* ─── LIST DETAIL ────────────────────────────────────────── */
 .list-detail-header {
   position: relative;
-  background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
-  padding: 44px 0 36px;
+  padding: 40px 0;
   overflow: hidden;
+  background-color: var(--bg-primary);
+  background-image:
+    linear-gradient(90deg,
+      var(--shelf-wood-dark) 0%,
+      var(--shelf-wood-mid) 22%,
+      var(--shelf-wood-light) 50%,
+      var(--shelf-wood-mid) 78%,
+      var(--shelf-wood-dark) 100%),
+    linear-gradient(rgba(16, 12, 8, 0.72), rgba(16, 12, 8, 0.72)),
+    url('https://ycejifwmvlpjewbsbrub.supabase.co/storage/v1/object/public/Public_Image/Bookcase.avif');
+  background-repeat: no-repeat, no-repeat, repeat;
+  background-position: bottom, center, center;
+  background-size: 100% 6px, 100% 100%, auto;
 }
 .list-detail-header::before {
   content: '';
@@ -682,9 +803,24 @@ main { max-width: 1200px; margin: 0 auto; padding: 36px 20px 72px; }
 
 /* ─── SEARCH PAGE ────────────────────────────────────────── */
 .search-hero {
-  background: var(--bg-secondary);
+  position: relative;
   border-bottom: 1px solid var(--border);
-  padding: 36px 0; margin-bottom: 36px;
+  padding: 40px 0;
+  margin-bottom: 36px;
+  overflow: hidden;
+  background-color: var(--bg-primary);
+  background-image:
+    linear-gradient(90deg,
+      var(--shelf-wood-dark) 0%,
+      var(--shelf-wood-mid) 22%,
+      var(--shelf-wood-light) 50%,
+      var(--shelf-wood-mid) 78%,
+      var(--shelf-wood-dark) 100%),
+    linear-gradient(rgba(16, 12, 8, 0.72), rgba(16, 12, 8, 0.72)),
+    url('https://ycejifwmvlpjewbsbrub.supabase.co/storage/v1/object/public/Public_Image/Bookcase.avif');
+  background-repeat: no-repeat, no-repeat, repeat;
+  background-position: bottom, center, center;
+  background-size: 100% 6px, 100% 100%, auto;
 }
 .search-hero-inner { max-width: 1200px; margin: 0 auto; padding: 0 20px; }
 .search-hero h2 {
@@ -730,13 +866,13 @@ main { max-width: 1200px; margin: 0 auto; padding: 36px 20px 72px; }
   position: relative;
   background: linear-gradient(to bottom, var(--bg-secondary), var(--bg-primary));
   padding: 44px 0 0;
-  overflow: hidden;
 }
 .book-detail-backdrop::before {
   content: '';
   position: absolute;
-  top: -280px; left: -60px;
+  top: -280px; left: 0;
   width: 700px; height: 540px;
+  z-index: 0;
   background: radial-gradient(ellipse at center, var(--accent-glow) 0%, transparent 65%);
   pointer-events: none;
 }
@@ -830,10 +966,22 @@ main { max-width: 1200px; margin: 0 auto; padding: 36px 20px 72px; }
 /* ─── PROFILE ────────────────────────────────────────────── */
 .profile-header-section {
   position: relative;
-  background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
-  padding: 36px 0;
+  padding: 40px 0;
   overflow: hidden;
+  background-color: var(--bg-primary);
+  background-image:
+    linear-gradient(90deg,
+      var(--shelf-wood-dark) 0%,
+      var(--shelf-wood-mid) 22%,
+      var(--shelf-wood-light) 50%,
+      var(--shelf-wood-mid) 78%,
+      var(--shelf-wood-dark) 100%),
+    linear-gradient(rgba(16, 12, 8, 0.72), rgba(16, 12, 8, 0.72)),
+    url('https://ycejifwmvlpjewbsbrub.supabase.co/storage/v1/object/public/Public_Image/Bookcase.avif');
+  background-repeat: no-repeat, no-repeat, repeat;
+  background-position: bottom, center, center;
+  background-size: 100% 6px, 100% 100%, auto;
 }
 .profile-header-section::before {
   content: '';
@@ -1433,24 +1581,23 @@ main { max-width: 1200px; margin: 0 auto; padding: 36px 20px 72px; }
 }
 
 /* ─── ADMIN COVER PICKER ────────────────────────────────── */
+/* In normal flow beneath the cover so no glow/overflow can ever clip it.
+   This is the admin tool for swapping a book's cover art. */
 .admin-cover-picker {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  z-index: 10;
+  position: relative;
+  z-index: 4;
   background: var(--bg-secondary);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
-  padding: 12px;
-  margin-top: 6px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
-  max-height: 360px;
+  padding: 14px;
+  margin-top: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(232, 182, 75, 0.1);
+  max-height: 420px;
   overflow-y: auto;
 }
 .cover-options-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
   gap: 8px;
 }
 .cover-option {
@@ -1634,7 +1781,9 @@ main { max-width: 1200px; margin: 0 auto; padding: 36px 20px 72px; }
   .profile-sidebar { position: static; }
 
   .hero { padding: 52px 0 44px; }
-  .hero h1 { font-size: 30px; }
+  .hero h1 { font-size: 30px; margin-bottom: 0; }
+  .hero-inner { flex-direction: row; }
+  .hero-actions { display: none; }
   .book-detail-inner { grid-template-columns: 160px 1fr; gap: 20px; }
   .favorites-grid { grid-template-columns: repeat(2, 1fr); }
   .lists-grid { grid-template-columns: 1fr; }
@@ -1653,6 +1802,19 @@ main { max-width: 1200px; margin: 0 auto; padding: 36px 20px 72px; }
 ::-webkit-scrollbar-track { background: var(--bg-primary); }
 ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; border: 2px solid var(--bg-primary); }
 ::-webkit-scrollbar-thumb:hover { background: #5c4c38; }
+
+/* ─── WARM UP JS-HARDCODED PLACEHOLDERS ─────────────────── */
+/* app.js injects placeholder book icons with slate-blue fills left over
+   from the old look. CSS `fill` overrides the SVG presentation attribute. */
+svg rect[fill="#3a4555"] { fill: var(--border-strong); }   /* book body → walnut */
+svg rect[fill="#67788a"] { fill: var(--text-muted); }      /* text lines → warm grey */
+
+/* delete buttons carry an inline red; tie it to the theme's ink-red */
+.list-delete-btn {
+  color: var(--accent-red) !important;
+  border-color: rgba(217, 92, 76, 0.5) !important;
+}
+.list-delete-btn:hover { background: rgba(217, 92, 76, 0.12) !important; }
 
 /* ─── REDUCED MOTION ─────────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {

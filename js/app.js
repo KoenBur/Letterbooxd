@@ -85,6 +85,7 @@ function updateAuthUI() {
   const signupBtn = document.getElementById('header-signup-btn');
   const profileLink = document.getElementById('profile-nav-link');
   const logoutBtn = document.getElementById('header-logout-btn');
+  const heroSearchBtn = document.getElementById('hero-search-btn');
   const heroProfileBtn = document.getElementById('hero-profile-btn');
 
   if (!hasSupabase) {
@@ -93,12 +94,14 @@ function updateAuthUI() {
     if (signupBtn) signupBtn.style.display = 'none';
     if (profileLink) profileLink.style.display = '';
     if (logoutBtn) logoutBtn.style.display = 'none';
+    if (heroSearchBtn) heroSearchBtn.style.display = 'none';
     if (heroProfileBtn) heroProfileBtn.style.display = '';
   } else {
     if (loginBtn) loginBtn.style.display = loggedIn ? 'none' : '';
     if (signupBtn) signupBtn.style.display = loggedIn ? 'none' : '';
     if (profileLink) profileLink.style.display = loggedIn ? '' : 'none';
     if (logoutBtn) logoutBtn.style.display = loggedIn ? '' : 'none';
+    if (heroSearchBtn) heroSearchBtn.style.display = loggedIn ? 'none' : '';
     if (heroProfileBtn) heroProfileBtn.style.display = loggedIn ? '' : 'none';
   }
 
@@ -2012,17 +2015,17 @@ function refreshCardBadge(card, key) {
 
 // ─── SHELF ARROWS ─────────────────────────────────────────────────────────
 function initShelfArrows() {
-  document.querySelectorAll('.shelf-arrow').forEach(btn => {
+  document.querySelectorAll('.shelf-arrow-right').forEach(btn => {
     btn.addEventListener('click', () => {
       const targetId = btn.dataset.target;
-      const shelf = document.getElementById(targetId);
-      const track = shelf?.querySelector('.shelf-track');
+      const track = document.getElementById(targetId)?.querySelector('.shelf-track');
       if (!track) return;
-      const scrollAmt = 600;
-      if (btn.classList.contains('shelf-arrow-left')) {
-        track.scrollBy({ left: -scrollAmt, behavior: 'smooth' });
+      const atEnd = track.scrollLeft + track.clientWidth >= track.scrollWidth - 4;
+      if (atEnd) {
+        const listId = btn.dataset.list;
+        if (listId) navigate('list-detail', { listId });
       } else {
-        track.scrollBy({ left: scrollAmt, behavior: 'smooth' });
+        track.scrollBy({ left: 600, behavior: 'smooth' });
       }
     });
   });
@@ -3121,8 +3124,6 @@ function loadProfilePage() {
   const bioEl = document.getElementById('profile-bio');
   if (bioEl) bioEl.textContent = state.bio || '';
   if (bioEl) bioEl.style.display = state.bio ? '' : 'none';
-  const emailEl = document.getElementById('profile-email');
-  if (emailEl) emailEl.textContent = state.user?.email || '';
 
   // Show current avatar URL in edit form
   const avatarInput = document.getElementById('avatar-url-input');
@@ -3797,6 +3798,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Shelf arrows
   initShelfArrows();
+
+  // Strip white background from bookend images via canvas
+  document.querySelectorAll('.bookend-img').forEach(img => {
+    const process = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      try {
+        ctx.drawImage(img, 0, 0);
+        const d = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        for (let i = 0; i < d.data.length; i += 4) {
+          if (d.data[i] > 235 && d.data[i+1] > 235 && d.data[i+2] > 235)
+            d.data[i+3] = 0;
+        }
+        ctx.putImageData(d, 0, 0);
+        img.src = canvas.toDataURL('image/png');
+      } catch(e) { /* CORS blocked — image shows as-is */ }
+    };
+    if (img.complete && img.naturalWidth) process();
+    else img.addEventListener('load', process);
+  });
 
   // Create list modal
   document.getElementById('create-list-btn')?.addEventListener('click', openCreateListModal);

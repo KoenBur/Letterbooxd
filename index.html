@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Letterbooxd — Track what you've read</title>
+  <title>Letterbooxd</title>
   <meta name="description" content="Letterbooxd — Social book tracking. Rate and review books, keep track of what you've read.">
   <link rel="stylesheet" href="css/style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='28'>📚</text></svg>">
@@ -39,9 +39,8 @@
   <div class="hero">
     <div class="hero-inner">
       <h1>Track books you've<br><em>read</em>. Tell your friends<br>what's good.</h1>
-      <p>Keep a diary of everything you've read, rate books and build a profile showcasing your four favourite reads.</p>
       <div class="hero-actions">
-        <button class="btn btn-primary" id="hero-search-btn">Get started — it's free</button>
+        <button class="btn btn-primary" id="hero-search-btn">Get started</button>
         <button class="btn btn-secondary" id="hero-profile-btn" style="display:none">Go to profile</button>
       </div>
     </div>
@@ -49,47 +48,35 @@
 
   <main>
     <section class="shelf-section">
-      <div class="section-header">
-        <h2>Popular Books</h2>
-        <a href="#" onclick="navigate('list-detail',{listId:'curated_popular_100'}); return false">More →</a>
-      </div>
+      <div class="section-header"><h2>Popular Books</h2></div>
       <div class="bookshelf-wrap">
-        <button class="shelf-arrow shelf-arrow-left" data-target="shelf-popular">&#8249;</button>
         <div class="bookshelf" id="shelf-popular">
           <div class="shelf-track" id="popular-books-grid"></div>
           <div class="shelf-plank"></div>
         </div>
-        <button class="shelf-arrow shelf-arrow-right" data-target="shelf-popular">&#8250;</button>
+        <button class="shelf-arrow shelf-arrow-right" data-target="shelf-popular" data-list="curated_popular_100"><img src="https://ycejifwmvlpjewbsbrub.supabase.co/storage/v1/object/public/Public_Image/bookshelves.PNG" alt="" class="bookend-img" crossorigin="anonymous"></button>
       </div>
     </section>
 
     <section class="shelf-section">
-      <div class="section-header">
-        <h2>Classic Literature</h2>
-        <a href="#" onclick="navigate('list-detail',{listId:'bbc'}); return false">More →</a>
-      </div>
+      <div class="section-header"><h2>Classic Literature</h2></div>
       <div class="bookshelf-wrap">
-        <button class="shelf-arrow shelf-arrow-left" data-target="shelf-classics">&#8249;</button>
         <div class="bookshelf" id="shelf-classics">
           <div class="shelf-track" id="classics-books-grid"></div>
           <div class="shelf-plank"></div>
         </div>
-        <button class="shelf-arrow shelf-arrow-right" data-target="shelf-classics">&#8250;</button>
+        <button class="shelf-arrow shelf-arrow-right" data-target="shelf-classics" data-list="bbc"><img src="https://ycejifwmvlpjewbsbrub.supabase.co/storage/v1/object/public/Public_Image/bookshelves.PNG" alt="" class="bookend-img" crossorigin="anonymous"></button>
       </div>
     </section>
 
     <section class="shelf-section">
-      <div class="section-header">
-        <h2>Science Fiction</h2>
-        <a href="#" onclick="navigate('list-detail',{listId:'curated_scifi_100'}); return false">More →</a>
-      </div>
+      <div class="section-header"><h2>Science Fiction</h2></div>
       <div class="bookshelf-wrap">
-        <button class="shelf-arrow shelf-arrow-left" data-target="shelf-fiction">&#8249;</button>
         <div class="bookshelf" id="shelf-fiction">
           <div class="shelf-track" id="fiction-books-grid"></div>
           <div class="shelf-plank"></div>
         </div>
-        <button class="shelf-arrow shelf-arrow-right" data-target="shelf-fiction">&#8250;</button>
+        <button class="shelf-arrow shelf-arrow-right" data-target="shelf-fiction" data-list="curated_scifi_100"><img src="https://ycejifwmvlpjewbsbrub.supabase.co/storage/v1/object/public/Public_Image/bookshelves.PNG" alt="" class="bookend-img" crossorigin="anonymous"></button>
       </div>
     </section>
   </main>
@@ -189,7 +176,6 @@
           <input type="url" id="avatar-url-input" placeholder="Profile picture URL (optional)" maxlength="500" style="width:100%">
           <button class="btn btn-primary btn-sm" id="save-username-btn">Save</button>
         </div>
-        <div id="profile-email" style="font-size:12px;color:var(--text-muted);margin-top:4px"></div>
       </div>
     </div>
   </div>
