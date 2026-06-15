@@ -490,7 +490,7 @@ main { max-width: 1200px; margin: 0 auto; padding: 20px 20px 40px; }
   flex-shrink: 0;
   align-self: flex-end;
   margin-bottom: 18px;
-  margin-left: 12px;
+  margin-left: 2px;
   margin-right: 12px;
   z-index: 10;
   background: transparent;
