@@ -334,8 +334,8 @@ main { max-width: 1400px; padding: 44px clamp(18px, 3.5vw, 54px) 84px; }
 
 /* Home */
 #page-home .hero {
-  min-height: 690px;
-  padding: clamp(60px, 8vw, 116px) 0 80px;
+  min-height: 0;
+  padding: clamp(36px, 4vw, 54px) 0 clamp(38px, 4vw, 56px);
   border-bottom: 1px solid var(--ink);
   background: var(--coral);
   color: var(--ink);
@@ -364,13 +364,14 @@ main { max-width: 1400px; padding: 44px clamp(18px, 3.5vw, 54px) 84px; }
 #page-home .hero-inner {
   max-width: 1480px;
   padding-inline: clamp(18px, 3.5vw, 54px);
-  gap: clamp(38px, 7vw, 110px);
+  gap: clamp(38px, 6vw, 92px);
+  align-items: center;
 }
 
 #page-home .hero-text { max-width: 680px; }
 
 .hero-kicker {
-  margin-bottom: 28px !important;
+  margin-bottom: 18px !important;
   color: var(--ink) !important;
   font-family: var(--font-body);
   font-size: 11px !important;
@@ -384,17 +385,17 @@ main { max-width: 1400px; padding: 44px clamp(18px, 3.5vw, 54px) 84px; }
   max-width: 760px;
   color: var(--ink);
   font-family: var(--font-display);
-  font-size: clamp(58px, 7.2vw, 108px);
-  font-stretch: 82%;
+  font-size: clamp(48px, 5vw, 74px);
+  font-stretch: 92%;
   font-weight: 800;
-  line-height: .82;
-  letter-spacing: -.075em;
+  line-height: .86;
+  letter-spacing: -.045em;
   text-transform: uppercase;
 }
 
 #page-home .hero h1 em {
   display: inline-block;
-  margin-top: 14px;
+  margin-top: 8px;
   color: var(--paper);
   font-style: normal;
   font-stretch: 105%;
@@ -403,13 +404,13 @@ main { max-width: 1400px; padding: 44px clamp(18px, 3.5vw, 54px) 84px; }
 
 #page-home .hero-subtitle {
   max-width: 530px;
-  margin-top: 30px;
+  margin-top: 20px;
   color: oklch(25% .04 323);
   font-size: 16px;
   line-height: 1.6;
 }
 
-#page-home .hero-actions { margin-top: 34px; }
+#page-home .hero-actions { margin-top: 22px; }
 #page-home .hero-actions .btn-primary { background: var(--night); color: var(--light); box-shadow: 4px 4px 0 var(--acid); }
 #page-home .hero-actions .btn-secondary { border-color: var(--ink); color: var(--ink); }
 #page-home .hero-actions .btn-secondary:hover { background: oklch(18% .035 323 / .09); }
