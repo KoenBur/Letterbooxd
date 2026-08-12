@@ -87,9 +87,9 @@ function updateAuthUI() {
   const logoutBtn = document.getElementById('header-logout-btn');
   const heroSearchBtn = document.getElementById('hero-search-btn');
   const heroProfileBtn = document.getElementById('hero-profile-btn');
+  // hero-explore-btn is always visible — not toggled by auth state
 
   if (!hasSupabase) {
-    // Offline mode — hide auth buttons, show profile link
     if (loginBtn) loginBtn.style.display = 'none';
     if (signupBtn) signupBtn.style.display = 'none';
     if (profileLink) profileLink.style.display = '';
@@ -107,6 +107,8 @@ function updateAuthUI() {
 
   const avatarSmall = document.getElementById('profile-avatar-small');
   if (avatarSmall) avatarSmall.textContent = state.username[0]?.toUpperCase() || 'R';
+
+  if (state.currentPage === 'home') renderHomepagePersonal();
 }
 
 async function signUp(email, password, username) {
@@ -1902,6 +1904,7 @@ const SHELF_FICTION = [
 ];
 
 async function loadHomePage() {
+  renderHomepagePersonal();
   if (homeLoaded) return;
   renderShelfSkeletons('popular-books-grid', 16);
   renderShelfSkeletons('classics-books-grid', 16);
@@ -1919,10 +1922,261 @@ async function loadHomePage() {
     renderShelfBooks('popular-books-grid', popular);
     renderShelfBooks('classics-books-grid', classics);
     renderShelfBooks('fiction-books-grid', fiction);
+    updateHeroFan();
     homeLoaded = true;
   } catch (e) {
     showToast('Could not load books. Check your connection.', 'error');
   }
+}
+
+function updateHeroFan() {
+  const books = state.popularBooks;
+  if (!books || !books.length) return;
+  const feature = document.getElementById('hero-feature');
+  if (!feature) return;
+
+  const featuredBooks = books.filter(b => b.coverUrl).slice(0, 5);
+  if (!featuredBooks.length) return;
+  let activeIndex = 0;
+
+  const renderFeature = (index, shouldAnimate = false) => {
+    activeIndex = index;
+    const book = featuredBooks[index];
+    const image = coverUrl(book.coverUrl, 'L');
+    const isRead = !!state.readBooks[book.key];
+    const title = escHtml(book.title);
+    const author = escHtml(book.author);
+
+    feature.innerHTML = `
+      <div class="hero-feature-label"><span>Currently circulating</span><span>${String(index + 1).padStart(2, '0')} / ${String(featuredBooks.length).padStart(2, '0')}</span></div>
+      <div class="hero-feature-stage">
+        <button class="hero-feature-cover" type="button" data-feature-open aria-label="Open ${title}">
+          <img src="${image}" alt="Cover of ${title}" loading="eager">
+        </button>
+        <div class="hero-feature-copy">
+          <div class="hero-feature-year">${book.year ? escHtml(String(book.year)) : 'Publication year unknown'}</div>
+          <h2>${title}</h2>
+          <p>by ${author}</p>
+          <div class="hero-feature-actions">
+            <button class="hero-feature-action primary" type="button" data-feature-open>Open book <span aria-hidden="true">↗</span></button>
+            <button class="hero-feature-action" type="button" data-feature-read>${isRead ? '✓ In your log' : '+ Mark as read'}</button>
+          </div>
+        </div>
+      </div>
+      <div class="hero-feature-queue" aria-label="More recommendations">
+        ${featuredBooks.map((candidate, candidateIndex) => `
+          <button class="hero-queue-item ${candidateIndex === index ? 'active' : ''}" type="button" data-feature-index="${candidateIndex}" ${candidateIndex === index ? 'aria-current="true"' : ''}>
+            <img src="${coverUrl(candidate.coverUrl, 'S')}" alt="" loading="lazy">
+            <span><strong>${escHtml(candidate.title)}</strong><small>${escHtml(candidate.author)}</small></span>
+            <b>${String(candidateIndex + 1).padStart(2, '0')}</b>
+          </button>
+        `).join('')}
+      </div>
+    `;
+
+    if (shouldAnimate && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      const stage = feature.querySelector('.hero-feature-stage');
+      stage?.animate([
+        { opacity: .55, transform: 'translateY(5px)' },
+        { opacity: 1, transform: 'translateY(0)' },
+      ], { duration: 160, easing: 'cubic-bezier(.23, 1, .32, 1)' });
+    }
+  };
+
+  feature.addEventListener('click', async event => {
+    const queueItem = event.target.closest('[data-feature-index]');
+    if (queueItem) {
+      const nextIndex = Number(queueItem.dataset.featureIndex);
+      if (nextIndex !== activeIndex) renderFeature(nextIndex, event.detail !== 0);
+      return;
+    }
+
+    const book = featuredBooks[activeIndex];
+    if (event.target.closest('[data-feature-open]')) {
+      openBook(book);
+      return;
+    }
+
+    if (event.target.closest('[data-feature-read]')) {
+      await toggleRead(book.key, book.title, book.author, book.coverUrl, book.year);
+      renderFeature(activeIndex, false);
+    }
+  });
+
+  renderFeature(0, false);
+}
+
+// ── Homepage personal sections ─────────────────────────────
+function computeMonthlyReads() {
+  const now = new Date();
+  const months = Array.from({ length: 6 }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+    return { y: d.getFullYear(), m: d.getMonth(), count: 0 };
+  });
+  Object.values(state.readBooks).forEach(b => {
+    if (!b?.dateRead) return;
+    const d = new Date(b.dateRead);
+    const slot = months.find(m => m.y === d.getFullYear() && m.m === d.getMonth());
+    if (slot) slot.count++;
+  });
+  return months.map(m => m.count);
+}
+
+function sparklineSVG(data) {
+  const W = 100, H = 36;
+  if (!data?.length || data.every(v => v === 0)) {
+    return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"><line x1="2" y1="${H / 2}" x2="${W - 2}" y2="${H / 2}" stroke="var(--amber)" stroke-width="1.5" stroke-dasharray="3 3" opacity="0.4"/></svg>`;
+  }
+  const max = Math.max(...data, 1);
+  const n = data.length;
+  const pts = data.map((v, i) => [
+    (i / (n - 1)) * (W - 6) + 3,
+    (1 - v / max) * (H - 10) + 5
+  ]);
+  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let i = 1; i < pts.length; i++) {
+    const cpx = (pts[i - 1][0] + pts[i][0]) / 2;
+    d += ` C ${cpx.toFixed(1)} ${pts[i - 1][1].toFixed(1)}, ${cpx.toFixed(1)} ${pts[i][1].toFixed(1)}, ${pts[i][0].toFixed(1)} ${pts[i][1].toFixed(1)}`;
+  }
+  const last = pts[pts.length - 1], first = pts[0];
+  const fill = `${d} L ${last[0].toFixed(1)} ${H} L ${first[0].toFixed(1)} ${H} Z`;
+  return `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" fill="none">
+    <path d="${fill}" fill="rgba(232,160,48,0.14)"/>
+    <path d="${d}" stroke="var(--amber)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+}
+
+function renderContinueReading() {
+  const grid = document.getElementById('continue-reading-grid');
+  if (!grid) return;
+  const books = Object.values(state.readBooks)
+    .filter(b => b?.title)
+    .sort((a, b) => {
+      if (!a.dateRead) return 1;
+      if (!b.dateRead) return -1;
+      return new Date(b.dateRead) - new Date(a.dateRead);
+    })
+    .slice(0, 3);
+
+  const addSlotHTML = `<div class="continue-book-slot continue-book-add">
+    <span class="continue-add-plus">+</span>
+    <span class="continue-add-label">Add a book</span>
+  </div>`;
+
+  const bookSlots = books.map(book => {
+    const url = coverUrl(book.coverUrl || book.cover_url, 'M');
+    return `<div class="continue-book-slot" data-key="${escHtml(book.key || '')}">
+      ${url
+        ? `<img src="${url}" alt="${escHtml(book.title || '')}" loading="lazy">`
+        : `<div class="continue-book-placeholder"><span>${escHtml(book.title || '')}</span></div>`}
+    </div>`;
+  });
+
+  const total = 4;
+  const addCount = Math.max(1, total - bookSlots.length);
+  const all = [...bookSlots, ...Array(addCount).fill(addSlotHTML)].slice(0, total);
+  grid.innerHTML = all.join('');
+
+  grid.querySelectorAll('.continue-book-slot:not(.continue-book-add)').forEach(slot => {
+    slot.addEventListener('click', () => {
+      const b = state.readBooks[slot.dataset.key];
+      if (b) openBook(b);
+    });
+  });
+  grid.querySelectorAll('.continue-book-add').forEach(btn => {
+    btn.addEventListener('click', () => navigate('search'));
+  });
+}
+
+async function renderYourListsHP() {
+  const container = document.getElementById('your-lists-list');
+  if (!container || !state.user || !sb) return;
+  try {
+    const { data } = await sb.from('lists')
+      .select('id, title, list_books(count)')
+      .eq('user_id', state.user.id)
+      .order('created_at', { ascending: false })
+      .limit(5);
+    if (!data?.length) {
+      container.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:4px 0">No lists yet. <button class="link-btn" id="hp-create-list-link">Create one →</button></div>`;
+      document.getElementById('hp-create-list-link')?.addEventListener('click', () => navigate('lists'));
+      return;
+    }
+    const listIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
+    container.innerHTML = data.map(list => {
+      const count = list.list_books?.[0]?.count ?? 0;
+      return `<div class="your-list-item" data-list-id="${escHtml(list.id)}">
+        <div class="your-list-badge">${listIcon}</div>
+        <div class="your-list-info">
+          <div class="your-list-title">${escHtml(list.title)}</div>
+          <div class="your-list-count">${count} book${count !== 1 ? 's' : ''}</div>
+        </div>
+        <span class="your-list-arrow">›</span>
+      </div>`;
+    }).join('');
+    container.querySelectorAll('.your-list-item').forEach(item => {
+      item.addEventListener('click', () => navigate('list-detail', { listId: item.dataset.listId }));
+    });
+  } catch (e) {
+    container.innerHTML = `<p style="color:var(--text-muted);font-size:13px">Could not load lists.</p>`;
+  }
+}
+
+async function renderHomepagePersonal() {
+  const sections = document.getElementById('homepage-personal-sections');
+  if (!sections) return;
+  if (!state.user) { sections.style.display = 'none'; return; }
+  sections.style.display = 'block';
+
+  // Books-read count
+  const readCount = Object.keys(state.readBooks).length;
+  const el = id => document.getElementById(id);
+  if (el('hp-stat-books')) el('hp-stat-books').textContent = readCount;
+
+  // Sparkline
+  if (el('hp-sparkline')) el('hp-sparkline').innerHTML = sparklineSVG(computeMonthlyReads());
+
+  // Average rating
+  const ratings = Object.values(state.ratings || {}).filter(r => r > 0);
+  const avgRating = ratings.length
+    ? (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1)
+    : '—';
+  if (el('hp-stat-rating')) el('hp-stat-rating').textContent = avgRating;
+
+  // Rating bars (1–5)
+  if (el('hp-rating-bars')) {
+    const counts = [1, 2, 3, 4, 5].map(r => ratings.filter(v => v === r).length);
+    const maxC = Math.max(...counts, 1);
+    el('hp-rating-bars').innerHTML = `<div class="rating-bars">${counts.map(c =>
+      `<div class="rating-bar-wrap"><div class="rating-bar" style="height:${c > 0 ? Math.max(6, Math.round((c / maxC) * 40)) : 2}px;opacity:${c > 0 ? 0.9 : 0.18}"></div></div>`
+    ).join('')}</div>`;
+  }
+
+  // Continue reading
+  renderContinueReading();
+
+  // Friends (async)
+  try {
+    const friends = await getFriends();
+    if (el('hp-stat-friends')) el('hp-stat-friends').textContent = friends.length;
+    if (el('hp-avatars')) {
+      const first4 = friends.slice(0, 4);
+      const rest = friends.length - 4;
+      el('hp-avatars').innerHTML = `<div class="avatar-cluster">
+        ${first4.map((f, i) =>
+          `<div class="cluster-avatar" style="left:${i * 22}px" title="${escHtml(f.username || '')}">
+            ${f.avatar_url
+              ? `<img src="${escHtml(f.avatar_url)}" alt="" onerror="this.style.display='none'">`
+              : `<span>${((f.username || '?')[0] || '?').toUpperCase()}</span>`}
+          </div>`).join('')}
+        ${rest > 0 ? `<div class="cluster-more" style="left:${first4.length * 22}px">+${rest}</div>` : ''}
+        ${friends.length === 0 ? '<span style="font-size:11px;color:var(--text-muted)">No friends yet</span>' : ''}
+      </div>`;
+    }
+  } catch (_) {}
+
+  // Lists
+  renderYourListsHP();
 }
 
 function renderShelfSkeletons(containerId, count) {
@@ -1990,6 +2244,15 @@ function shelfBookHTML(book) {
           </div>
         </div>
         ${isRead ? '<div class="read-badge">✓</div>' : ''}
+      </div>
+      <div class="shelf-book-info">
+        <div class="shelf-book-state">${isRead ? 'In your reading log' : 'Open book'}</div>
+        <div class="shelf-book-title">${escHtml(book.title)}</div>
+        <div class="shelf-book-author">${escHtml(book.author)}</div>
+        <div class="shelf-book-foot">
+          <span>${book.year ? escHtml(String(book.year)) : 'Year unknown'}</span>
+          <span aria-hidden="true">↗</span>
+        </div>
       </div>
     </div>
   `;
@@ -2105,7 +2368,10 @@ function listCardHTML(list, type) {
       <div class="list-card-books" id="${escHtml(list.id)}-preview">
         ${Array(5).fill(0).map(() => `<div class="list-placeholder-cover">📚</div>`).join('')}
       </div>
-      <div class="list-card-info">
+      <div class="list-card-info" style="position:relative">
+        <div class="list-type-badge">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        </div>
         <div class="list-card-title">${escHtml(list.title)}</div>
         <div class="list-card-meta">${escHtml(list.source)} · ${bookCount} books${list.year ? ' · ' + escHtml(list.year) : ''}</div>
         <div class="list-card-desc">${escHtml(list.desc)}</div>
@@ -2334,27 +2600,64 @@ async function loadBookDetail(book) {
     <div class="book-detail-backdrop">
       <div class="detail-back-bar"><button class="back-btn" id="book-back-btn">← Back</button></div>
       <div class="book-detail-inner">
-        <div style="position:relative">
-          ${cover ? `<img class="book-detail-cover" id="detail-cover-img" src="${cover}" alt="${escHtml(book.title)}" onerror="this.style.display='none';document.getElementById('detail-cover-placeholder').style.display='flex'">` : ''}
-          <div class="book-detail-cover-placeholder" id="detail-cover-placeholder" ${cover ? 'style="display:none"' : ''}>
-            <svg width="48" height="64" viewBox="0 0 24 32" fill="none"><rect x="0" y="0" width="24" height="32" rx="2" fill="#3a4555"/></svg>
-            <p>${escHtml(book.title)}</p>
+        <div class="book-detail-left">
+          <div style="position:relative">
+            ${cover ? `<img class="book-detail-cover" id="detail-cover-img" src="${cover}" alt="${escHtml(book.title)}" onerror="this.style.display='none';document.getElementById('detail-cover-placeholder').style.display='flex'">` : ''}
+            <div class="book-detail-cover-placeholder" id="detail-cover-placeholder" ${cover ? 'style="display:none"' : ''}>
+              <svg width="48" height="64" viewBox="0 0 24 32" fill="none"><rect x="0" y="0" width="24" height="32" rx="2" fill="#3a4555"/></svg>
+              <p>${escHtml(book.title)}</p>
+            </div>
+            ${state.isAdmin ? `
+            <div class="admin-cover-actions" id="admin-cover-actions">
+              <button class="btn btn-secondary btn-sm admin-btn" id="admin-find-covers" title="Find cover options from multiple sources">🔍 Find covers</button>
+              <button class="btn btn-secondary btn-sm admin-btn" id="admin-custom-cover" title="Set a custom cover URL">🖼 Paste URL</button>
+            </div>
+            <div class="admin-cover-picker" id="admin-cover-picker" style="display:none"></div>` : ''}
           </div>
-          ${state.isAdmin ? `
-          <div class="admin-cover-actions" id="admin-cover-actions">
-            <button class="btn btn-secondary btn-sm admin-btn" id="admin-find-covers" title="Find cover options from multiple sources">🔍 Find covers</button>
-            <button class="btn btn-secondary btn-sm admin-btn" id="admin-custom-cover" title="Set a custom cover URL">🖼 Paste URL</button>
-          </div>
-          <div class="admin-cover-picker" id="admin-cover-picker" style="display:none"></div>` : ''}
+          ${book.year || book.pages || book.categories?.length ? `
+          <div class="book-meta-cards">
+            ${book.year ? `
+            <div class="book-meta-card">
+              <div class="meta-icon-badge">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                </svg>
+              </div>
+              <div>
+                <div class="meta-card-label">First published</div>
+                <div class="meta-card-value">${book.year}</div>
+              </div>
+            </div>` : ''}
+            ${book.pages ? `
+            <div class="book-meta-card">
+              <div class="meta-icon-badge">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/>
+                </svg>
+              </div>
+              <div>
+                <div class="meta-card-label">Pages</div>
+                <div class="meta-card-value">${book.pages}</div>
+              </div>
+            </div>` : ''}
+            ${book.categories?.length ? `
+            <div class="book-meta-card">
+              <div class="meta-icon-badge">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/>
+                  <circle cx="7" cy="7" r="1.5" fill="white" stroke="none"/>
+                </svg>
+              </div>
+              <div>
+                <div class="meta-card-label">Genres</div>
+                <div class="meta-card-value">${book.categories.slice(0,2).join(', ')}</div>
+              </div>
+            </div>` : ''}
+          </div>` : ''}
         </div>
         <div class="book-detail-info">
-          ${book.year ? `<div class="book-detail-year">${book.year}</div>` : ''}
           <h1 class="book-detail-title">${escHtml(book.title)}</h1>
           <div class="book-detail-author">by <a href="#" class="author-link" data-author="${escHtml(book.author)}">${escHtml(book.author)}</a></div>
-          <div class="detail-meta">
-            ${book.pages ? `<div class="meta-item"><span class="meta-label">Pages</span><span class="meta-value">${book.pages}</span></div>` : ''}
-            <div class="meta-item"><span class="meta-label">Status</span><span class="meta-value" id="detail-status">${isRead ? '✓ Read' : '— Not read'}</span></div>
-          </div>
           <div class="detail-actions">
             <button class="detail-action-btn ${isRead ? 'active-read' : ''}" id="detail-read-btn">
               <span>${isRead ? '✓' : '+'}</span> ${isRead ? 'Read' : 'Mark as Read'}
@@ -2370,8 +2673,10 @@ async function loadBookDetail(book) {
               ${[1,2,3,4,5].map(i => `<span class="detail-star ${i <= rating ? 'filled' : ''}" data-val="${i}">★</span>`).join('')}
             </div>
           </div>
-          <div id="detail-description" class="book-description">
-            <span style="color:var(--text-muted);font-style:italic">Loading description…</span>
+          <div class="book-description-wrap">
+            <div id="detail-description" class="book-description">
+              <span style="color:var(--text-muted);font-style:italic">Loading description…</span>
+            </div>
           </div>
         </div>
       </div>
@@ -3724,6 +4029,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
   document.getElementById('hero-profile-btn')?.addEventListener('click', () => navigate('profile'));
+  document.getElementById('hero-explore-btn')?.addEventListener('click', () => {
+    navigate('search');
+    setTimeout(() => document.getElementById('main-search-input')?.focus(), 100);
+  });
+  document.getElementById('hp-continue-more')?.addEventListener('click', e => { e.preventDefault(); navigate('profile'); });
+  document.getElementById('hp-lists-more')?.addEventListener('click', e => { e.preventDefault(); navigate('lists'); });
 
   // Rating modal stars
   document.querySelectorAll('.modal-star').forEach(star => {

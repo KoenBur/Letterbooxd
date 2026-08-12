@@ -4,8 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Letterbooxd</title>
-  <meta name="description" content="Letterbooxd — Social book tracking. Rate and review books, keep track of what you've read.">
+  <meta name="description" content="Keep a personal record of the books you've read and discover what to read next with Letterbooxd.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/night-library.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='28'>📚</text></svg>">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.min.js"></script>
 </head>
@@ -38,15 +41,82 @@
 <div class="page active" id="page-home">
   <div class="hero">
     <div class="hero-inner">
-      <h1>Track books you've<br><em>read</em>. Tell your friends<br>what's good.</h1>
-      <div class="hero-actions">
-        <button class="btn btn-primary" id="hero-search-btn">Get started</button>
-        <button class="btn btn-secondary" id="hero-profile-btn" style="display:none">Go to profile</button>
+      <div class="hero-text">
+        <p class="hero-kicker">Your reading life, in one place</p>
+        <h1>Remember every book.<br><em>Find the next one.</em></h1>
+        <p class="hero-subtitle">Keep a personal record of what you've read, rate the books that stayed with you, and discover what belongs on your next page.</p>
+        <div class="hero-actions">
+          <button class="btn btn-primary" id="hero-search-btn">Log a book <span aria-hidden="true">→</span></button>
+          <button class="btn btn-secondary" id="hero-explore-btn">Find your next read</button>
+          <button class="btn btn-secondary" id="hero-profile-btn" style="display:none">Go to profile</button>
+        </div>
+        <p class="hero-note"><span aria-hidden="true">●</span> Free to use. Your shelf stays yours.</p>
+      </div>
+      <div class="hero-visual">
+        <div class="hero-feature" id="hero-feature" aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Personal homepage sections: stats + continue reading + your lists -->
+  <div id="homepage-personal-sections" style="display:none">
+    <div class="homepage-stats-bar">
+      <div class="stat-card">
+        <div class="stat-card-badge">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+        </div>
+        <div class="stat-card-body">
+          <div class="stat-card-num" id="hp-stat-books">0</div>
+          <div class="stat-card-label">Books read</div>
+          <div id="hp-sparkline" class="stat-card-sparkline"></div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-badge">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </div>
+        <div class="stat-card-body">
+          <div class="stat-card-num" id="hp-stat-friends">—</div>
+          <div class="stat-card-label">Friends</div>
+          <div id="hp-avatars" class="stat-card-avatars"></div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-card-badge">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        </div>
+        <div class="stat-card-body">
+          <div class="stat-card-num" id="hp-stat-rating">—</div>
+          <div class="stat-card-label">Avg rating</div>
+          <div id="hp-rating-bars" class="stat-card-bars"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="homepage-personal">
+      <div class="personal-section">
+        <div class="personal-section-header">
+          <span>Continue reading</span>
+          <a href="#" id="hp-continue-more">›</a>
+        </div>
+        <div class="continue-reading-grid" id="continue-reading-grid"></div>
+      </div>
+      <div class="personal-section">
+        <div class="personal-section-header">
+          <span>Your lists</span>
+          <a href="#" id="hp-lists-more">›</a>
+        </div>
+        <div class="your-lists-list" id="your-lists-list"></div>
       </div>
     </div>
   </div>
 
   <main>
+    <div class="discovery-intro">
+      <p>Browse the stacks</p>
+      <h2>Three ways into<br>your next book.</h2>
+      <span>Updated from the Letterbooxd catalogue</span>
+    </div>
     <section class="shelf-section">
       <div class="section-header"><h2>Popular Books</h2></div>
       <div class="bookshelf-wrap">
@@ -161,10 +231,22 @@
         <div class="profile-bio" id="profile-bio"></div>
         <div style="color:var(--text-muted);font-size:13px">Member · Letterbooxd</div>
         <div class="profile-stats">
-          <div class="stat-item stat-clickable" id="stat-item-read"><span class="stat-num" id="stat-read">0</span><span class="stat-label">Books</span></div>
-          <div class="stat-item stat-clickable" id="stat-item-rated"><span class="stat-num" id="stat-rated">0</span><span class="stat-label">Rated</span></div>
-          <div class="stat-item stat-clickable" id="stat-item-favs"><span class="stat-num" id="stat-favs">0</span><span class="stat-label">Favs</span></div>
-          <div class="stat-item stat-clickable" id="stat-item-wishlist"><span class="stat-num" id="stat-wishlist">0</span><span class="stat-label">Wishlist</span></div>
+          <div class="stat-item stat-clickable" id="stat-item-read">
+            <div class="stat-icon-badge"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg></div>
+            <span class="stat-num" id="stat-read">0</span><span class="stat-label">Books</span>
+          </div>
+          <div class="stat-item stat-clickable" id="stat-item-rated">
+            <div class="stat-icon-badge"><svg width="13" height="13" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></div>
+            <span class="stat-num" id="stat-rated">0</span><span class="stat-label">Rated</span>
+          </div>
+          <div class="stat-item stat-clickable" id="stat-item-favs">
+            <div class="stat-icon-badge"><svg width="13" height="13" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="1.5"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg></div>
+            <span class="stat-num" id="stat-favs">0</span><span class="stat-label">Favs</span>
+          </div>
+          <div class="stat-item stat-clickable" id="stat-item-wishlist">
+            <div class="stat-icon-badge"><svg width="13" height="13" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="1.5"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg></div>
+            <span class="stat-num" id="stat-wishlist">0</span><span class="stat-label">Wishlist</span>
+          </div>
         </div>
       </div>
       <div style="margin-left:auto;display:flex;flex-direction:column;gap:8px;align-items:flex-end">
@@ -211,7 +293,7 @@
       </div>
       <div class="sidebar-section wishlist-tile" id="wishlist-tile" onclick="navigate('wishlist')" style="margin-top:16px;cursor:pointer">
         <div style="display:flex;align-items:center;gap:10px">
-          <div class="wishlist-tile-icon">🔖</div>
+          <div class="wishlist-tile-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="1.5"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg></div>
           <div>
             <h4 class="sidebar-heading" style="margin-bottom:2px">Read Later</h4>
             <p style="color:var(--text-muted);font-size:12px;margin:0"><span id="wishlist-tile-count">0</span> books saved</p>
@@ -247,9 +329,18 @@
         <div class="profile-bio" id="user-bio"></div>
         <div style="color:var(--text-muted);font-size:13px">Member · Letterbooxd</div>
         <div class="profile-stats">
-          <div class="stat-item stat-clickable" id="user-stat-item-read"><span class="stat-num" id="user-stat-read">0</span><span class="stat-label">Books</span></div>
-          <div class="stat-item stat-clickable" id="user-stat-item-rated"><span class="stat-num" id="user-stat-rated">0</span><span class="stat-label">Rated</span></div>
-          <div class="stat-item stat-clickable" id="user-stat-item-favs"><span class="stat-num" id="user-stat-favs">0</span><span class="stat-label">Favs</span></div>
+          <div class="stat-item stat-clickable" id="user-stat-item-read">
+            <div class="stat-icon-badge"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg></div>
+            <span class="stat-num" id="user-stat-read">0</span><span class="stat-label">Books</span>
+          </div>
+          <div class="stat-item stat-clickable" id="user-stat-item-rated">
+            <div class="stat-icon-badge"><svg width="13" height="13" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg></div>
+            <span class="stat-num" id="user-stat-rated">0</span><span class="stat-label">Rated</span>
+          </div>
+          <div class="stat-item stat-clickable" id="user-stat-item-favs">
+            <div class="stat-icon-badge"><svg width="13" height="13" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="1.5"><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg></div>
+            <span class="stat-num" id="user-stat-favs">0</span><span class="stat-label">Favs</span>
+          </div>
         </div>
       </div>
       <div style="margin-left:auto">
