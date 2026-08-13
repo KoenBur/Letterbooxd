@@ -3968,7 +3968,7 @@ function renderFavorites() {
   grid.querySelectorAll('.fav-open-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const fav = state.favorites[parseInt(btn.dataset.idx)];
+s      const fav = state.favorites[parseInt(btn.dataset.idx)];
       if (fav) openBook(fav);
     });
   });
