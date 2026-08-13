@@ -21,6 +21,7 @@
     <nav id="main-nav">
       <a href="#" data-page="home" class="active">Books</a>
       <a href="#" data-page="lists">Lists</a>
+      <a href="#" data-page="profile">Profile</a>
       <a href="#" data-page="search" class="mobile-only">Search</a>
     </nav>
     <div class="header-search">
@@ -81,7 +82,7 @@
           <div id="hp-avatars" class="stat-card-avatars"></div>
         </div>
       </div>
-      <div class="stat-card">
+      <div class="stat-card">s
         <div class="stat-card-badge">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
         </div>
@@ -117,6 +118,12 @@
       <h2>Three ways into<br>your next book.</h2>
       <span>Updated from the Letterbooxd catalogue</span>
     </div>
+    <button class="blind-date-entry" id="blind-date-entry" type="button">
+      <span class="blind-date-entry-index">NEW / DISCOVERY GAME</span>
+      <span class="blind-date-entry-copy"><strong>Blind Date With a Book</strong><small>Judge the book without its cover.</small></span>
+      <span class="blind-date-entry-mark" aria-hidden="true">?</span>
+      <span class="blind-date-entry-arrow" aria-hidden="true">Start →</span>
+    </button>
     <section class="shelf-section">
       <div class="section-header"><h2>Popular Books</h2></div>
       <div class="bookshelf-wrap">
@@ -153,6 +160,25 @@
 </div>
 
 <!-- ─── LISTS PAGE ─────────────────────────────────────────────────────── -->
+<!-- BLIND DATE GAME -->
+<div class="page" id="page-blind-date">
+  <main class="blind-date-shell">
+    <div class="blind-date-topbar">
+      <button class="back-btn blind-date-back" type="button" onclick="navigate('home')">← Back to books</button>
+      <div class="blind-date-progress" aria-label="Session progress">
+        <span id="blind-date-progress-label">1 / 10</span>
+        <span class="blind-date-progress-track"><i id="blind-date-progress-fill"></i></span>
+      </div>
+    </div>
+    <section class="blind-date-intro">
+      <p>Letterbooxd presents</p>
+      <h1>Blind Date<br>With a Book</h1>
+      <span>Nothing but the story.<br>No cover. No reputation.</span>
+    </section>
+    <div id="blind-date-stage" class="blind-date-stage" aria-live="polite"></div>
+  </main>
+</div>
+
 <div class="page" id="page-lists">
   <div class="search-hero">
     <div class="search-hero-inner" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
