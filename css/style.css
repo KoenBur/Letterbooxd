@@ -1851,7 +1851,7 @@ svg rect[fill="#67788a"] { fill: var(--text-muted); }
   .homepage-stats-bar { grid-template-columns: repeat(3, 1fr); gap: 10px; }
 }
 @media (max-width: 680px) {
-s  .homepage-stats-bar { grid-template-columns: 1fr; gap: 10px; }
+ss  .homepage-stats-bar { grid-template-columns: 1fr; gap: 10px; }
   .homepage-personal { grid-template-columns: 1fr; }
   .continue-reading-grid { grid-template-columns: repeat(4, 1fr); }
 }
