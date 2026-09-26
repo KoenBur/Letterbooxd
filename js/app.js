@@ -2234,7 +2234,6 @@ async function loadBlindDatePage() {
 }
 
 function navigate(page, params = {}) {
-  if (typeof cleanupArcade === 'function' && state.currentPage === 'arcade') cleanupArcade();
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
   state._prevPage = state.currentPage;
@@ -2273,12 +2272,10 @@ function navigate(page, params = {}) {
     loadListsPreviews();
   } else if (page === 'blind-date') {
     loadBlindDatePage();
-  } else if (page === 'arcade') {
-    loadArcadePage(params.game);
   }
 
   if (!params.fromHistory) {
-    const path = page === 'arcade' ? `/arcade${params.game ? `/${params.game}` : ''}` : '/';
+    const path = '/';
     if (location.pathname !== path) history.pushState({ page, game: params.game || null }, '', path);
   }
 }
@@ -4605,11 +4602,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   window.addEventListener('popstate', () => {
-    const match = location.pathname.match(/^\/arcade(?:\/([a-z-]+))?\/?$/);
-    navigate(match ? 'arcade' : 'home', { game: match?.[1], fromHistory: true });
+    navigate('home', { fromHistory: true });
   });
-  const queryRoute = new URLSearchParams(location.search).get('route');
-  const initialArcade = location.pathname.match(/^\/arcade(?:\/([a-z-]+))?\/?$/) || (queryRoute === 'arcade' ? ['', undefined] : null);
-  navigate(initialArcade ? 'arcade' : 'home', { game: initialArcade?.[1], fromHistory: true });
-  if (queryRoute === 'arcade') history.replaceState({page:'arcade'}, '', '/arcade');
+  navigate('home', { fromHistory: true });
 });

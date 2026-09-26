@@ -1,33 +1,58 @@
-# Product
+# Letterbooxd
 
-## Register
+Letterbooxd is a personal reading companion for keeping track of finished books, rating the ones that stay with you, and finding a promising next read.
 
-brand
+The product should feel literary, warm, and thoughtfully edited: closer to a well-used independent bookshop than a generic dashboard.
 
-## Users
+## Current state
 
-Readers who want a simple personal record of the books they have finished and a useful way to discover what to read next. They use Letterbooxed from both desktop and mobile browsers. Social discovery is welcome, but it is not the primary reason to use the product.
+The site is a static, browser-based application. Its visual direction is still evolving, so treat the existing interface as a starting point rather than a finished design system.
 
-## Product Purpose
+The current product includes:
 
-Letterbooxed gives readers one calm place to log completed books, keep a visible reading history, rate what they have read, and discover promising next reads. Success means that recording a book feels immediate and choosing another feels inviting rather than overwhelming.
+- a homepage with curated shelves and discovery entry points;
+- book search and book-detail views;
+- reading history, ratings, favourites, and a reading wishlist;
+- personal and community reading lists;
+- profiles and sign-in through Supabase;
+- the Blind Date With a Book discovery experience.
 
-## Brand Personality
+## Product principles
 
-Literary, warm, assured. The product should feel thoughtfully edited and contemporary, with the quiet confidence of a well-used independent bookshop rather than the visual language of a generic software dashboard.
-
-## Anti-references
-
-Avoid conspicuous AI-generated landing-page patterns: decorative glassmorphism, excessive gradients, interchangeable rounded cards, invented metrics, feature-icon grids, generic productivity language, and social features presented as the main value. Do not imitate Letterboxd's dark film-centric identity or make the experience feel like a corporate analytics tool.
-
-## Design Principles
-
-- Put logging and discovering books within immediate reach.
-- Let real books and reading activity carry the visual story.
+- Make recording a book feel immediate.
+- Make discovering a next read inviting instead of overwhelming.
+- Let books and reading activity carry the visual story.
 - Prefer edited clarity over dashboard density.
-- Make desktop and mobile feel equally intentional.
-- Keep social activity helpful and peripheral.
+- Keep social activity useful but secondary.
+- Give mobile screens the same level of care as desktop screens.
 
-## Accessibility & Inclusion
+Avoid decorative glassmorphism, excessive gradients, generic feature-card grids, invented metrics, and a film-centric imitation of Letterboxd.
 
-No formal compliance target is required. Preserve practical fundamentals such as readable contrast, keyboard-operable controls, clear focus states, useful text alternatives, and reduced-motion support where feasible.
+## Project structure
+
+```text
+index.html              Application markup
+css/style.css           Base styles
+css/night-library.css   Current editorial visual layer and responsive styles
+js/app.js               Application behaviour, data loading, and page routing
+CNAME                   Custom domain configuration
+AGENTS.md               Instructions for Codex and other coding agents
+```
+
+## Run locally
+
+Python 3.14 is installed on the development machine. From the project root, start a local server with:
+
+```powershell
+py -3.14 -m http.server 4173 --bind 127.0.0.1
+```
+
+Then open [http://127.0.0.1:4173](http://127.0.0.1:4173).
+
+## Visual checks
+
+After a UI change, inspect the local preview at both a desktop width (around 1440px) and a mobile width (around 390px). Check that text is readable, controls remain reachable, no content is cut off, and there is no unintended horizontal scrolling.
+
+## Working with changes
+
+Keep changes focused and reviewable. Test locally before committing. Commit and push only when explicitly requested.
