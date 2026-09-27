@@ -34,7 +34,12 @@ Avoid decorative glassmorphism, excessive gradients, generic feature-card grids,
 index.html              Application markup
 css/style.css           Base styles
 css/night-library.css   Current editorial visual layer and responsive styles
-js/app.js               Application behaviour, data loading, and page routing
+js/app.js               Account state, page routing, rendering, and initialization
+js/catalog.js           Book search, metadata, and cover lookup/cache
+js/curated-lists.js     Offline curated-list data
+js/social.js            Friends and reviews
+js/blind-date.js        Blind Date discovery flow
+supabase/              Applied cleanup migration and rollback reference
 CNAME                   Custom domain configuration
 AGENTS.md               Instructions for Codex and other coding agents
 ```
@@ -56,3 +61,7 @@ After a UI change, inspect the local preview at both a desktop width (around 144
 ## Working with changes
 
 Keep changes focused and reviewable. Test locally before committing. Commit and push only when explicitly requested.
+
+The scripts load in the order listed in `index.html`, with `app.js` last. They use
+the existing shared browser scope so inline event handlers continue to work;
+there is no bundler or new dependency.
