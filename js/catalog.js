@@ -194,6 +194,18 @@ async function fetchExactTitleFromOL(title, limit) {
 }
 
 async function searchBooks(query, limit = 20) {
+  const key = `${normalizeText(query)}|${limit}`;
+  const cached = searchResultCache.get(key);
+  if (cached && Date.now() - cached.createdAt < 5 * 60 * 1000) return cached.promise;
+  const promise = searchBooksUncached(query, limit).catch(error => {
+    searchResultCache.delete(key);
+    throw error;
+  });
+  searchResultCache.set(key, { createdAt: Date.now(), promise });
+  return promise;
+}
+
+async function searchBooksUncached(query, limit = 20) {
   const trimmed = query.trim();
   if (!trimmed) return [];
   const byMatch = trimmed.match(/^(.+?)\s+by\s+(.+)$/i);
@@ -301,10 +313,16 @@ async function searchBooksGoogle(query, limit = 20, startIndex = 0) {
 
 // ─── COVER CACHE ─────────────────────────────────────────────────────────
 const coverMemCache = {};
+const coverLookupInflight = new Map();
+const searchResultCache = new Map();
+
+function cacheKey(title = '', author = '') {
+  return `${title}||${author}`.toLowerCase();
+}
 
 async function getCachedCover(title, author) {
   author = author || '';
-  const key = (title + '||' + author).toLowerCase();
+  const key = cacheKey(title, author);
   if (coverMemCache[key]) return coverMemCache[key];
   if (!sb) return null;
   try {
@@ -324,23 +342,32 @@ async function getCachedCover(title, author) {
 }
 
 async function saveCoverToCache(title, author, coverUrl, bookKey, year) {
-  const key = (title + '||' + author).toLowerCase();
+  const key = cacheKey(title, author);
   const result = { key: bookKey || title, title, author, coverUrl, year: year || '' };
   coverMemCache[key] = result;
   if (!sb || !coverUrl) return;
   try {
-    await queryResult(sb.from('book_cover_cache').upsert({
-      title_lower: title.toLowerCase(),
-      author_lower: author.toLowerCase(),
-      cover_url: coverUrl,
-      book_key: bookKey || title,
-      year: year || '',
-    }, { onConflict: 'title_lower,author_lower' }));
+    await queryResult(sb.rpc('cache_book_cover', {
+      p_title: title,
+      p_author: author || '',
+      p_cover_url: coverUrl,
+      p_book_key: bookKey || title,
+      p_year: year || '',
+    }));
   } catch (e) { /* ignore cache write failure */ }
 }
 
 // ─── COVER LOOKUP: OL → Wikipedia → Google ──────────────────────────────
 async function searchBooksForList(title, author) {
+  const key = cacheKey(title, author);
+  if (coverLookupInflight.has(key)) return coverLookupInflight.get(key);
+  const request = searchBooksForListUncached(title, author)
+    .finally(() => coverLookupInflight.delete(key));
+  coverLookupInflight.set(key, request);
+  return request;
+}
+
+async function searchBooksForListUncached(title, author) {
   author = author || '';
   // Check cache first
   const cached = await getCachedCover(title, author);
@@ -474,16 +501,21 @@ async function fetchOLTrending(limit = 100) {
 }
 
 async function getCuratedShelf(titles) {
-  const results = await Promise.allSettled(
-    titles.map(async ({ title, author }) => {
+  const results = new Array(titles.length);
+  let nextIndex = 0;
+  async function worker() {
+    while (nextIndex < titles.length) {
+      const index = nextIndex++;
+      const { title, author } = titles[index];
       try {
-        return await searchBooksForList(title, author);
+        results[index] = await searchBooksForList(title, author);
       } catch {
-        return { key: title, title, author, coverUrl: null, year: '' };
+        results[index] = { key: title, title, author, coverUrl: null, year: '' };
       }
-    })
-  );
-  return results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(6, titles.length) }, worker));
+  return results.filter(Boolean);
 }
 
 // Wikipedia cover — searches for the book article and grabs the page image
@@ -531,13 +563,13 @@ async function adminUpdateCover(title, author, newCoverUrl, bookKey, year) {
   const key = (title + '||' + author).toLowerCase();
   // Update Supabase cache
   if (sb) {
-    if (!await saveMutation(queryResult(sb.from('book_cover_cache').upsert({
-      title_lower: title.toLowerCase(),
-      author_lower: author.toLowerCase(),
-      cover_url: newCoverUrl,
-      book_key: bookKey || title,
-      year: year || '',
-    }, { onConflict: 'title_lower,author_lower' })))) return false;
+    if (!await saveMutation(queryResult(sb.rpc('admin_set_book_cover', {
+      p_title: title,
+      p_author: author || '',
+      p_cover_url: newCoverUrl,
+      p_book_key: bookKey || title,
+      p_year: year || '',
+    })))) return false;
   }
   // Update the in-memory cover only after persistence succeeds.
   coverMemCache[key] = { key: bookKey || title, title, author, coverUrl: newCoverUrl, year: year || '' };

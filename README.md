@@ -39,9 +39,7 @@ js/catalog.js           Book search, metadata, and cover lookup/cache
 js/curated-lists.js     Offline curated-list data
 js/social.js            Friends and reviews
 js/blind-date.js        Blind Date discovery flow
-supabase/              Applied cleanup migration and rollback reference
 CNAME                   Custom domain configuration
-AGENTS.md               Instructions for Codex and other coding agents
 ```
 
 ## Run locally

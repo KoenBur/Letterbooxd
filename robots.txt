@@ -1,0 +1,9 @@
+# Krijg de tering.
+#
+#   _
+# >(o )__
+#  ( ._> /
+#   `---'
+
+User-agent: *
+Disallow: /
