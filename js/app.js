@@ -1183,7 +1183,6 @@ async function loadListDetail(listId) {
           </div>`;
         }).join('')}
       </div>
-      <button class="btn btn-secondary" id="list-load-more" type="button" style="display:none;margin:28px auto 0">Load more books</button>
     </div>
   `;
 
@@ -1191,20 +1190,9 @@ async function loadListDetail(listId) {
 }
 
 async function loadListCovers(books) {
-  const batchSize = 12;
-  let nextIndex = 0;
-  const loadMore = document.getElementById('list-load-more');
-
-  async function loadBatch() {
-    const start = nextIndex;
+  const batchSize = 8;
+  for (let start = 0; start < books.length; start += batchSize) {
     const batch = books.slice(start, start + batchSize);
-    if (!batch.length) return;
-    nextIndex += batch.length;
-    if (loadMore) {
-      loadMore.style.display = nextIndex < books.length ? '' : 'none';
-      loadMore.disabled = true;
-      loadMore.textContent = 'Loading…';
-    }
     const results = await Promise.allSettled(
       batch.map(b => searchBooksForList(b.title, b.author))
     );
@@ -1241,14 +1229,7 @@ async function loadListCovers(books) {
         }
       }
     });
-    if (loadMore) {
-      loadMore.disabled = false;
-      loadMore.textContent = 'Load more books';
-    }
   }
-
-  loadMore?.addEventListener('click', loadBatch);
-  await loadBatch();
 }
 
 // ─── BOOK DETAIL ───────────────────────────────────────────────────────────
