@@ -341,6 +341,49 @@ async function getCachedCover(title, author) {
   return null;
 }
 
+async function getCachedCovers(books) {
+  const cached = new Map();
+  const missing = [];
+  const requestedByKey = new Map(books.map(book => [cacheKey(book.title, book.author), book]));
+
+  books.forEach(book => {
+    const key = cacheKey(book.title, book.author);
+    if (coverMemCache[key]) cached.set(key, coverMemCache[key]);
+    else missing.push(book);
+  });
+
+  if (!missing.length || !sb) return cached;
+
+  const titles = [...new Set(missing.map(book => book.title.toLowerCase()))];
+  const titleBatches = [];
+  for (let index = 0; index < titles.length; index += 50) {
+    titleBatches.push(titles.slice(index, index + 50));
+  }
+
+  try {
+    const results = await Promise.all(titleBatches.map(titlesBatch => queryResult(sb
+      .from('book_cover_cache')
+      .select('title_lower, author_lower, cover_url, book_key, year')
+      .in('title_lower', titlesBatch))));
+
+    results.flatMap(result => result.data || []).forEach(row => {
+      const key = cacheKey(row.title_lower, row.author_lower);
+      const requested = requestedByKey.get(key);
+      const result = {
+        key: row.book_key || row.title_lower,
+        title: requested?.title || row.title_lower,
+        author: requested?.author || row.author_lower,
+        coverUrl: row.cover_url,
+        year: row.year || '',
+      };
+      coverMemCache[key] = result;
+      cached.set(key, result);
+    });
+  } catch (e) { /* a cache miss can still use the normal provider lookup */ }
+
+  return cached;
+}
+
 async function saveCoverToCache(title, author, coverUrl, bookKey, year) {
   const key = cacheKey(title, author);
   const result = { key: bookKey || title, title, author, coverUrl, year: year || '' };

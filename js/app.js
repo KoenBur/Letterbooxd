@@ -1190,46 +1190,53 @@ async function loadListDetail(listId) {
 }
 
 async function loadListCovers(books) {
+  const cachedCovers = await getCachedCovers(books);
+  const unresolved = [];
+
+  books.forEach((book, idx) => {
+    const cached = cachedCovers.get(cacheKey(book.title, book.author));
+    if (cached) renderListCover(cached, idx);
+    else unresolved.push({ book, idx });
+  });
+
   const batchSize = 8;
-  for (let start = 0; start < books.length; start += batchSize) {
-    const batch = books.slice(start, start + batchSize);
+  for (let start = 0; start < unresolved.length; start += batchSize) {
+    const batch = unresolved.slice(start, start + batchSize);
     const results = await Promise.allSettled(
-      batch.map(b => searchBooksForList(b.title, b.author))
+      batch.map(({ book }) => searchBooksForList(book.title, book.author))
     );
     results.forEach((r, j) => {
-      const idx = start + j;
-      const el = document.getElementById(`list-cover-${idx}`);
-      if (!el) return;
-      if (r.status === 'fulfilled' && r.value) {
-        const book = r.value;
-        const tile = el.closest('.list-tile');
-        if (tile) {
-          tile._book = book;
-          tile.addEventListener('click', async (e) => { if (!e.target.closest('.overlay-btn')) openBook(book); });
-          tile.style.cursor = 'pointer';
-        }
-        if (book.coverUrl) {
-          el.innerHTML = `<img src="${book.coverUrl}" alt="${escHtml(book.title)}" class="list-tile-cover-img" onerror="this.style.display='none';this.parentElement.querySelector('.list-tile-placeholder')?.style.display='flex'">
-            <div class="list-tile-placeholder" style="display:none"><span class="list-tile-num">${idx+1}</span></div>`;
-        }
-        // Bind mark-read button
-        const readBtn = tile?.querySelector(`.list-mark-read[data-idx="${idx}"]`);
-        if (readBtn) {
-          const isRead = Object.values(state.readBooks).some(rb => rb.title.toLowerCase() === book.title.toLowerCase());
-          if (isRead) { readBtn.textContent = '✓'; readBtn.classList.add('read'); }
-          readBtn.onclick = async (e) => {
-            e.stopPropagation();
-            await toggleRead(book.key || book.title, book.title, book.author, book.coverUrl, book.year);
-            const nowRead = !!state.readBooks[book.key || book.title];
-            readBtn.textContent = nowRead ? '✓' : '📖';
-            readBtn.classList.toggle('read', nowRead);
-            const badge = document.getElementById(`list-read-badge-${idx}`);
-            if (badge) badge.innerHTML = nowRead ? '<div class="read-badge" style="position:static;width:16px;height:16px;font-size:8px">✓</div>' : '';
-          };
-        }
-      }
+      if (r.status === 'fulfilled' && r.value) renderListCover(r.value, batch[j].idx);
     });
   }
+}
+
+function renderListCover(book, idx) {
+  const el = document.getElementById(`list-cover-${idx}`);
+  if (!el) return;
+  const tile = el.closest('.list-tile');
+  if (tile) {
+    tile._book = book;
+    tile.addEventListener('click', async (e) => { if (!e.target.closest('.overlay-btn')) openBook(book); });
+    tile.style.cursor = 'pointer';
+  }
+  if (book.coverUrl) {
+    el.innerHTML = `<img src="${book.coverUrl}" alt="${escHtml(book.title)}" class="list-tile-cover-img" onerror="this.style.display='none';this.parentElement.querySelector('.list-tile-placeholder')?.style.display='flex'">
+      <div class="list-tile-placeholder" style="display:none"><span class="list-tile-num">${idx+1}</span></div>`;
+  }
+  const readBtn = tile?.querySelector(`.list-mark-read[data-idx="${idx}"]`);
+  if (!readBtn) return;
+  const isRead = Object.values(state.readBooks).some(rb => rb.title.toLowerCase() === book.title.toLowerCase());
+  if (isRead) { readBtn.textContent = '✓'; readBtn.classList.add('read'); }
+  readBtn.onclick = async (e) => {
+    e.stopPropagation();
+    await toggleRead(book.key || book.title, book.title, book.author, book.coverUrl, book.year);
+    const nowRead = !!state.readBooks[book.key || book.title];
+    readBtn.textContent = nowRead ? '✓' : '📖';
+    readBtn.classList.toggle('read', nowRead);
+    const badge = document.getElementById(`list-read-badge-${idx}`);
+    if (badge) badge.innerHTML = nowRead ? '<div class="read-badge" style="position:static;width:16px;height:16px;font-size:8px">✓</div>' : '';
+  };
 }
 
 // ─── BOOK DETAIL ───────────────────────────────────────────────────────────
