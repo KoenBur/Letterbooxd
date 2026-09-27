@@ -28,30 +28,6 @@ The current product includes:
 
 Avoid decorative glassmorphism, excessive gradients, generic feature-card grids, invented metrics, and a film-centric imitation of Letterboxd.
 
-## Project structure
-
-```text
-index.html              Application markup
-css/style.css           Base styles
-css/night-library.css   Current editorial visual layer and responsive styles
-js/app.js               Account state, page routing, rendering, and initialization
-js/catalog.js           Book search, metadata, and cover lookup/cache
-js/curated-lists.js     Offline curated-list data
-js/social.js            Friends and reviews
-js/blind-date.js        Blind Date discovery flow
-CNAME                   Custom domain configuration
-```
-
-## Run locally
-
-Python 3.14 is installed on the development machine. From the project root, start a local server with:
-
-```powershell
-py -3.14 -m http.server 4173 --bind 127.0.0.1
-```
-
-Then open [http://127.0.0.1:4173](http://127.0.0.1:4173).
-
 ## Visual checks
 
 After a UI change, inspect the local preview at both a desktop width (around 1440px) and a mobile width (around 390px). Check that text is readable, controls remain reachable, no content is cut off, and there is no unintended horizontal scrolling.
