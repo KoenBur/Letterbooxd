@@ -8,6 +8,30 @@ try {
     sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 } catch (e) { }
 
+// A Supabase error is returned as data unless explicitly checked.
+async function queryResult(request) {
+  const result = await request;
+  if (result.error) throw result.error;
+  return result;
+}
+
+async function saveMutation(request) {
+  try { await request; return true; }
+  catch (error) {
+    showToast(error.message || 'Could not save. Please try again.', 'error');
+    return false;
+  }
+}
+
+// Prevent a second click from starting the same save before the first finishes.
+const pendingBookMutations = new Set();
+async function runBookMutation(key, action) {
+  if (pendingBookMutations.has(key)) return false;
+  pendingBookMutations.add(key);
+  try { return await action(); }
+  finally { pendingBookMutations.delete(key); }
+}
+
 // ─── STATE ──────────────────────────────────────────────────────────────
 const state = {
   user: null,           // supabase user object
@@ -18,8 +42,6 @@ const state = {
   wishlist: {},
   currentPage: 'home',
   currentBook: null,
-  currentList: null,
-  searchQuery: '',
   searchResults: [],
   popularBooks: [],
   classicsBooks: [],
@@ -32,14 +54,18 @@ const state = {
 };
 
 // ─── AUTH ────────────────────────────────────────────────────────────────
+function loadLocalGuestData() {
+  state.username = localStorage.getItem('lbx_username') || 'Reader';
+  state.readBooks = JSON.parse(localStorage.getItem('lbx_read') || '{}');
+  state.ratings = JSON.parse(localStorage.getItem('lbx_ratings') || '{}');
+  state.favorites = JSON.parse(localStorage.getItem('lbx_favorites') || '[]');
+  state.wishlist = JSON.parse(localStorage.getItem('lbx_wishlist') || '{}');
+}
+
 async function initAuth() {
   if (!sb) {
     // Offline mode — load from localStorage
-    state.username = localStorage.getItem('lbx_username') || 'Reader';
-    state.readBooks = JSON.parse(localStorage.getItem('lbx_read') || '{}');
-    state.ratings = JSON.parse(localStorage.getItem('lbx_ratings') || '{}');
-    state.favorites = JSON.parse(localStorage.getItem('lbx_favorites') || '[]');
-    state.wishlist = JSON.parse(localStorage.getItem('lbx_wishlist') || '{}');
+    loadLocalGuestData();
     updateAuthUI();
     return;
   }
@@ -50,11 +76,7 @@ async function initAuth() {
     await loadUserData();
   } else {
     // Not logged in — load from localStorage as fallback
-    state.username = localStorage.getItem('lbx_username') || 'Reader';
-    state.readBooks = JSON.parse(localStorage.getItem('lbx_read') || '{}');
-    state.ratings = JSON.parse(localStorage.getItem('lbx_ratings') || '{}');
-    state.favorites = JSON.parse(localStorage.getItem('lbx_favorites') || '[]');
-    state.wishlist = JSON.parse(localStorage.getItem('lbx_wishlist') || '{}');
+    loadLocalGuestData();
   }
   updateAuthUI();
 
@@ -161,33 +183,33 @@ async function migrateLocalData(userId) {
 
     const readEntries = Object.values(oldRead).filter(b => b && b.key);
     if (readEntries.length) {
-      await sb.from('read_books').upsert(
+      await queryResult(sb.from('read_books').upsert(
         readEntries.map(b => ({
           user_id: userId, book_key: b.key, title: b.title,
           author: b.author, cover_url: b.coverUrl, year: b.year, date_read: b.dateRead,
         })),
         { onConflict: 'user_id,book_key' }
-      );
+      ));
     }
 
     const ratingEntries = Object.entries(oldRatings).filter(([k, v]) => v > 0);
     if (ratingEntries.length) {
-      await sb.from('ratings').upsert(
+      await queryResult(sb.from('ratings').upsert(
         ratingEntries.map(([key, rating]) => ({
           user_id: userId, book_key: key, rating,
         })),
         { onConflict: 'user_id,book_key' }
-      );
+      ));
     }
 
     if (oldFavs.length) {
-      await sb.from('favorites').upsert(
+      await queryResult(sb.from('favorites').upsert(
         oldFavs.map((f, i) => ({
           user_id: userId, book_key: f.key, title: f.title,
           author: f.author, cover_url: f.coverUrl, position: i,
         })),
         { onConflict: 'user_id,book_key' }
-      );
+      ));
     }
   } catch (e) { }
 }
@@ -201,24 +223,16 @@ async function loadUserData() {
   state.isAdmin = false;
 
   // Load profile
-  let profile;
-  const { data: p1, error: e1 } = await sb
-    .from('profiles').select('username, is_admin, bio, avatar_url').eq('id', uid).single();
-  if (e1) {
-    const { data: p2 } = await sb
-      .from('profiles').select('username, is_admin, bio').eq('id', uid).single();
-    profile = p2;
-  } else {
-    profile = p1;
-  }
+  const { data: profile } = await queryResult(sb
+    .from('profiles').select('username, is_admin, bio, avatar_url').eq('id', uid).single());
   state.username = profile?.username || state.user.user_metadata?.username || 'Reader';
   state.isAdmin = !!profile?.is_admin;
   state.bio = profile?.bio || '';
   state.avatarUrl = profile?.avatar_url || '';
 
   // Load read books
-  const { data: reads } = await sb
-    .from('read_books').select('*').eq('user_id', uid);
+  const { data: reads } = await queryResult(sb
+    .from('read_books').select('*').eq('user_id', uid));
   state.readBooks = {};
   (reads || []).forEach(r => {
     state.readBooks[r.book_key] = {
@@ -228,22 +242,22 @@ async function loadUserData() {
   });
 
   // Load ratings
-  const { data: rats } = await sb
-    .from('ratings').select('*').eq('user_id', uid);
+  const { data: rats } = await queryResult(sb
+    .from('ratings').select('*').eq('user_id', uid));
   state.ratings = {};
   (rats || []).forEach(r => { state.ratings[r.book_key] = r.rating; });
 
   // Load favorites
-  const { data: favs } = await sb
-    .from('favorites').select('*').eq('user_id', uid).order('position');
+  const { data: favs } = await queryResult(sb
+    .from('favorites').select('*').eq('user_id', uid).order('position'));
   state.favorites = (favs || []).map(f => ({
     key: f.book_key, title: f.title, author: f.author, coverUrl: f.cover_url,
   }));
 
   // Load wishlist (read later)
   try {
-    const { data: wish } = await sb
-      .from('wishlist').select('*').eq('user_id', uid);
+    const { data: wish } = await queryResult(sb
+      .from('wishlist').select('*').eq('user_id', uid));
     state.wishlist = {};
     (wish || []).forEach(w => {
       state.wishlist[w.book_key] = {
@@ -256,8 +270,8 @@ async function loadUserData() {
   }
 }
 
-// Save functions — write to Supabase if logged in, localStorage as fallback
-async function save() {
+// Persist guest data locally. Signed-in actions save through Supabase.
+async function saveLocalGuestData() {
   if (state.user) {
     // Supabase saves happen in individual toggle/action functions
     return;
@@ -289,13 +303,12 @@ async function loadAllLists() {
   if (!sb) return {};
   try {
     // Load all lists with their books in one query using a join
-    const { data: lists, error } = await sb
+    const { data: lists } = await queryResult(sb
       .from('lists')
       .select('*, list_books(id, title, author, position)')
       .order('is_curated', { ascending: false })
-      .order('created_at', { ascending: true });
-    if (error) throw error;
-    // Clear and rebuild cache
+      .order('created_at', { ascending: true }));
+    // Refresh cached entries from the returned lists
     for (const list of (lists || [])) {
       const books = (list.list_books || [])
         .sort((a, b) => a.position - b.position)
@@ -324,12 +337,11 @@ async function loadListBooks(listId) {
   if (!sb) return [];
   if (listsCache[listId]?.books?.length) return listsCache[listId].books;
   try {
-    const { data, error } = await sb
+    const { data } = await queryResult(sb
       .from('list_books')
       .select('title, author, position')
       .eq('list_id', listId)
-      .order('position');
-    if (error) throw error;
+      .order('position'));
     const books = (data || []).map(b => ({ title: b.title, author: b.author }));
     if (listsCache[listId]) listsCache[listId].books = books;
     return books;
@@ -341,7 +353,7 @@ async function loadListBooks(listId) {
 async function createUserList(title, description, books) {
   if (!sb || !state.user) throw new Error('Must be logged in');
   const id = 'user_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-  const { error: listError } = await sb.from('lists').insert({
+  await queryResult(sb.from('lists').insert({
     id,
     user_id: state.user.id,
     title,
@@ -349,8 +361,7 @@ async function createUserList(title, description, books) {
     year: new Date().getFullYear().toString(),
     description,
     is_curated: false,
-  });
-  if (listError) throw listError;
+  }));
 
   if (books.length) {
     const rows = books.map((b, i) => ({
@@ -359,8 +370,7 @@ async function createUserList(title, description, books) {
       author: b.author,
       position: i,
     }));
-    const { error: booksError } = await sb.from('list_books').insert(rows);
-    if (booksError) throw booksError;
+    await queryResult(sb.from('list_books').insert(rows));
   }
 
   // Update cache
@@ -382,662 +392,10 @@ async function deleteUserList(listId) {
   if (!sb || !state.user) return;
   const list = listsCache[listId];
   if (!list || list.is_curated || list.user_id !== state.user.id) return;
-  await sb.from('list_books').delete().eq('list_id', listId);
-  await sb.from('lists').delete().eq('id', listId);
+  if (!await saveMutation(queryResult(sb.from('lists').delete().eq('id', listId)))) return false;
   delete listsCache[listId];
+  return true;
 }
-
-// Fallback hardcoded list IDs for offline mode
-const CURATED_LIST_IDS = ['lemonde', 'modernlibrary', 'telegraph', 'bbc', 'time', 'guardian'];
-
-const CURATED_LISTS_OFFLINE = {
-  lemonde: {
-    title: "Le Monde's 100 Books of the Century",
-    source: "Le Monde",
-    year: "1999",
-    desc: "In 1999, the French newspaper Le Monde asked its readers to vote for the greatest books of the 20th century. The result was a fascinating cross-section of world literature.",
-    books: [
-      { title: "In Search of Lost Time", author: "Marcel Proust" },
-      { title: "The Trial", author: "Franz Kafka" },
-      { title: "Journey to the End of the Night", author: "Louis-Ferdinand Céline" },
-      { title: "The Stranger", author: "Albert Camus" },
-      { title: "Ulysses", author: "James Joyce" },
-      { title: "The Little Prince", author: "Antoine de Saint-Exupéry" },
-      { title: "One Hundred Years of Solitude", author: "Gabriel García Márquez" },
-      { title: "The Great Gatsby", author: "F. Scott Fitzgerald" },
-      { title: "The Sound and the Fury", author: "William Faulkner" },
-      { title: "Brave New World", author: "Aldous Huxley" },
-      { title: "The Master and Margarita", author: "Mikhail Bulgakov" },
-      { title: "The Grapes of Wrath", author: "John Steinbeck" },
-      { title: "Lolita", author: "Vladimir Nabokov" },
-      { title: "The Plague", author: "Albert Camus" },
-      { title: "Nausea", author: "Jean-Paul Sartre" },
-      { title: "Waiting for Godot", author: "Samuel Beckett" },
-      { title: "The Tin Drum", author: "Günter Grass" },
-      { title: "The Old Man and the Sea", author: "Ernest Hemingway" },
-      { title: "Lord of the Flies", author: "William Golding" },
-      { title: "Nineteen Eighty-Four", author: "George Orwell" },
-      { title: "For Whom the Bell Tolls", author: "Ernest Hemingway" },
-      { title: "The Name of the Rose", author: "Umberto Eco" },
-      { title: "Gone with the Wind", author: "Margaret Mitchell" },
-      { title: "The Diary of a Young Girl", author: "Anne Frank" },
-      { title: "The Second Sex", author: "Simone de Beauvoir" },
-      { title: "If This Is a Man", author: "Primo Levi" },
-      { title: "The Leopard", author: "Giuseppe Tomasi di Lampedusa" },
-      { title: "Doctor Zhivago", author: "Boris Pasternak" },
-      { title: "The Tropic of Cancer", author: "Henry Miller" },
-      { title: "Man's Fate", author: "André Malraux" },
-      { title: "Being and Nothingness", author: "Jean-Paul Sartre" },
-      { title: "A Room of One's Own", author: "Virginia Woolf" },
-      { title: "The Counterfeiters", author: "André Gide" },
-      { title: "The Lover", author: "Marguerite Duras" },
-      { title: "Les Enfants Terribles", author: "Jean Cocteau" },
-      { title: "Beloved", author: "Toni Morrison" },
-      { title: "Catch-22", author: "Joseph Heller" },
-      { title: "The Catcher in the Rye", author: "J.D. Salinger" },
-      { title: "To Kill a Mockingbird", author: "Harper Lee" },
-      { title: "Invisible Man", author: "Ralph Ellison" },
-      { title: "On the Road", author: "Jack Kerouac" },
-      { title: "Ficciones", author: "Jorge Luis Borges" },
-      { title: "The Unbearable Lightness of Being", author: "Milan Kundera" },
-      { title: "The Metamorphosis", author: "Franz Kafka" },
-      { title: "To the Lighthouse", author: "Virginia Woolf" },
-      { title: "Mrs Dalloway", author: "Virginia Woolf" },
-      { title: "The Bell Jar", author: "Sylvia Plath" },
-      { title: "Steppenwolf", author: "Hermann Hesse" },
-      { title: "Siddhartha", author: "Hermann Hesse" },
-      { title: "The Glass Bead Game", author: "Hermann Hesse" },
-      { title: "Things Fall Apart", author: "Chinua Achebe" },
-      { title: "Animal Farm", author: "George Orwell" },
-      { title: "A Farewell to Arms", author: "Ernest Hemingway" },
-      { title: "Death in Venice", author: "Thomas Mann" },
-      { title: "The Magic Mountain", author: "Thomas Mann" },
-      { title: "Buddenbrooks", author: "Thomas Mann" },
-      { title: "All Quiet on the Western Front", author: "Erich Maria Remarque" },
-      { title: "Berlin Alexanderplatz", author: "Alfred Döblin" },
-      { title: "Nadja", author: "André Breton" },
-      { title: "The Tartar Steppe", author: "Dino Buzzati" },
-      { title: "The Stranger", author: "Albert Camus" },
-      { title: "The Myth of Sisyphus", author: "Albert Camus" },
-      { title: "No Exit", author: "Jean-Paul Sartre" },
-      { title: "The Mandarins", author: "Simone de Beauvoir" },
-      { title: "Memoirs of Hadrian", author: "Marguerite Yourcenar" },
-      { title: "Zazie in the Metro", author: "Raymond Queneau" },
-      { title: "The Ravishing of Lol Stein", author: "Marguerite Duras" },
-      { title: "Tropism", author: "Nathalie Sarraute" },
-      { title: "A Void", author: "Georges Perec" },
-      { title: "Life: A User's Manual", author: "Georges Perec" },
-      { title: "W, or the Memory of Childhood", author: "Georges Perec" },
-      { title: "The Opposing Shore", author: "Julien Gracq" },
-      { title: "Friday", author: "Michel Tournier" },
-      { title: "Bonjour Tristesse", author: "Françoise Sagan" },
-      { title: "Thérèse Desqueyroux", author: "François Mauriac" },
-      { title: "The Horseman on the Roof", author: "Jean Giono" },
-      { title: "Strait Is the Gate", author: "André Gide" },
-      { title: "The Immoralist", author: "André Gide" },
-      { title: "The Voyeur", author: "Alain Robbe-Grillet" },
-      { title: "Jealousy", author: "Alain Robbe-Grillet" },
-      { title: "The Erasers", author: "Alain Robbe-Grillet" },
-      { title: "Moderato Cantabile", author: "Marguerite Duras" },
-      { title: "The Wind", author: "Claude Simon" },
-      { title: "The Flanders Road", author: "Claude Simon" },
-      { title: "The Bald Soprano", author: "Eugène Ionesco" },
-      { title: "Rhinoceros", author: "Eugène Ionesco" },
-      { title: "Endgame", author: "Samuel Beckett" },
-      { title: "Molloy", author: "Samuel Beckett" },
-      { title: "The Unnamable", author: "Samuel Beckett" },
-      { title: "The Roots of Heaven", author: "Romain Gary" },
-      { title: "Promise at Dawn", author: "Romain Gary" },
-      { title: "The Life Before Us", author: "Romain Gary" },
-      { title: "Gargantua and Pantagruel", author: "François Rabelais" },
-      { title: "Germinal", author: "Émile Zola" },
-      { title: "Les Misérables", author: "Victor Hugo" },
-      { title: "Madame Bovary", author: "Gustave Flaubert" },
-      { title: "The Red and the Black", author: "Stendhal" },
-      { title: "The Count of Monte Cristo", author: "Alexandre Dumas" },
-      { title: "Cyrano de Bergerac", author: "Edmond Rostand" },
-    ]
-  },
-  modernlibrary: {
-    title: "Modern Library 100 Best Novels",
-    source: "Modern Library",
-    year: "1998",
-    desc: "The board's selection of the 100 best English-language novels published since 1900. A canonical list that has sparked endless debate since its publication.",
-    books: [
-      { title: "Ulysses", author: "James Joyce" },
-      { title: "The Great Gatsby", author: "F. Scott Fitzgerald" },
-      { title: "A Portrait of the Artist as a Young Man", author: "James Joyce" },
-      { title: "Lolita", author: "Vladimir Nabokov" },
-      { title: "Brave New World", author: "Aldous Huxley" },
-      { title: "The Sound and the Fury", author: "William Faulkner" },
-      { title: "Catch-22", author: "Joseph Heller" },
-      { title: "Darkness at Noon", author: "Arthur Koestler" },
-      { title: "Sons and Lovers", author: "D.H. Lawrence" },
-      { title: "The Grapes of Wrath", author: "John Steinbeck" },
-      { title: "Under the Volcano", author: "Malcolm Lowry" },
-      { title: "The Way of All Flesh", author: "Samuel Butler" },
-      { title: "1984", author: "George Orwell" },
-      { title: "I, Claudius", author: "Robert Graves" },
-      { title: "To the Lighthouse", author: "Virginia Woolf" },
-      { title: "An American Tragedy", author: "Theodore Dreiser" },
-      { title: "The Heart Is a Lonely Hunter", author: "Carson McCullers" },
-      { title: "Slaughterhouse-Five", author: "Kurt Vonnegut" },
-      { title: "Invisible Man", author: "Ralph Ellison" },
-      { title: "Native Son", author: "Richard Wright" },
-      { title: "Henderson the Rain King", author: "Saul Bellow" },
-      { title: "Appointment in Samarra", author: "John O'Hara" },
-      { title: "U.S.A. Trilogy", author: "John Dos Passos" },
-      { title: "Winesburg, Ohio", author: "Sherwood Anderson" },
-      { title: "A Passage to India", author: "E.M. Forster" },
-      { title: "The Wings of the Dove", author: "Henry James" },
-      { title: "The Ambassadors", author: "Henry James" },
-      { title: "Tender Is the Night", author: "F. Scott Fitzgerald" },
-      { title: "The Studs Lonigan Trilogy", author: "James T. Farrell" },
-      { title: "The Good Soldier", author: "Ford Madox Ford" },
-      { title: "Animal Farm", author: "George Orwell" },
-      { title: "The Golden Bowl", author: "Henry James" },
-      { title: "Sister Carrie", author: "Theodore Dreiser" },
-      { title: "A Handful of Dust", author: "Evelyn Waugh" },
-      { title: "As I Lay Dying", author: "William Faulkner" },
-      { title: "All the King's Men", author: "Robert Penn Warren" },
-      { title: "The Bridge of San Luis Rey", author: "Thornton Wilder" },
-      { title: "Howards End", author: "E.M. Forster" },
-      { title: "Go Tell It on the Mountain", author: "James Baldwin" },
-      { title: "The Heart of the Matter", author: "Graham Greene" },
-      { title: "Lord of the Flies", author: "William Golding" },
-      { title: "Deliverance", author: "James Dickey" },
-      { title: "A Dance to the Music of Time", author: "Anthony Powell" },
-      { title: "Point Counter Point", author: "Aldous Huxley" },
-      { title: "The Sun Also Rises", author: "Ernest Hemingway" },
-      { title: "The Secret Agent", author: "Joseph Conrad" },
-      { title: "Nostromo", author: "Joseph Conrad" },
-      { title: "The Rainbow", author: "D.H. Lawrence" },
-      { title: "Women in Love", author: "D.H. Lawrence" },
-      { title: "Tropic of Cancer", author: "Henry Miller" },
-      { title: "The Naked and the Dead", author: "Norman Mailer" },
-      { title: "Portnoy's Complaint", author: "Philip Roth" },
-      { title: "Pale Fire", author: "Vladimir Nabokov" },
-      { title: "Light in August", author: "William Faulkner" },
-      { title: "On the Road", author: "Jack Kerouac" },
-      { title: "The Maltese Falcon", author: "Dashiell Hammett" },
-      { title: "Parade's End", author: "Ford Madox Ford" },
-      { title: "The Age of Innocence", author: "Edith Wharton" },
-      { title: "Zuleika Dobson", author: "Max Beerbohm" },
-      { title: "The Moviegoer", author: "Walker Percy" },
-      { title: "Death Comes for the Archbishop", author: "Willa Cather" },
-      { title: "From Here to Eternity", author: "James Jones" },
-      { title: "The Wapshot Chronicles", author: "John Cheever" },
-      { title: "The Catcher in the Rye", author: "J.D. Salinger" },
-      { title: "A Clockwork Orange", author: "Anthony Burgess" },
-      { title: "Of Human Bondage", author: "W. Somerset Maugham" },
-      { title: "Heart of Darkness", author: "Joseph Conrad" },
-      { title: "Main Street", author: "Sinclair Lewis" },
-      { title: "The House of Mirth", author: "Edith Wharton" },
-      { title: "The Alexandria Quartet", author: "Lawrence Durrell" },
-      { title: "A High Wind in Jamaica", author: "Richard Hughes" },
-      { title: "A House for Mr Biswas", author: "V.S. Naipaul" },
-      { title: "The Day of the Locust", author: "Nathanael West" },
-      { title: "A Farewell to Arms", author: "Ernest Hemingway" },
-      { title: "Scoop", author: "Evelyn Waugh" },
-      { title: "The Prime of Miss Jean Brodie", author: "Muriel Spark" },
-      { title: "Finnegans Wake", author: "James Joyce" },
-      { title: "Kim", author: "Rudyard Kipling" },
-      { title: "A Room with a View", author: "E.M. Forster" },
-      { title: "Brideshead Revisited", author: "Evelyn Waugh" },
-      { title: "The Adventures of Augie March", author: "Saul Bellow" },
-      { title: "Angle of Repose", author: "Wallace Stegner" },
-      { title: "A Bend in the River", author: "V.S. Naipaul" },
-      { title: "The Death of the Heart", author: "Elizabeth Bowen" },
-      { title: "Lord Jim", author: "Joseph Conrad" },
-      { title: "Ragtime", author: "E.L. Doctorow" },
-      { title: "The Old Wives' Tale", author: "Arnold Bennett" },
-      { title: "The Call of the Wild", author: "Jack London" },
-      { title: "Loving", author: "Henry Green" },
-      { title: "Midnight's Children", author: "Salman Rushdie" },
-      { title: "Tobacco Road", author: "Erskine Caldwell" },
-      { title: "Ironweed", author: "William Kennedy" },
-      { title: "The Magus", author: "John Fowles" },
-      { title: "Wide Sargasso Sea", author: "Jean Rhys" },
-      { title: "Under the Net", author: "Iris Murdoch" },
-      { title: "Sophie's Choice", author: "William Styron" },
-      { title: "The Sheltering Sky", author: "Paul Bowles" },
-      { title: "The Postman Always Rings Twice", author: "James M. Cain" },
-      { title: "The Ginger Man", author: "J.P. Donleavy" },
-      { title: "The Magnificent Ambersons", author: "Booth Tarkington" },
-    ]
-  },
-  telegraph: {
-    title: "The Telegraph's Greatest Villains in Literature",
-    source: "The Telegraph",
-    year: "2008",
-    desc: "The most compelling, chilling and unforgettable antagonists ever committed to the page — the books that gave us literature's greatest monsters.",
-    books: [
-      { title: "Lolita", author: "Vladimir Nabokov" },
-      { title: "Crime and Punishment", author: "Fyodor Dostoevsky" },
-      { title: "American Psycho", author: "Bret Easton Ellis" },
-      { title: "We Need to Talk About Kevin", author: "Lionel Shriver" },
-      { title: "Perfume", author: "Patrick Süskind" },
-      { title: "The Talented Mr Ripley", author: "Patricia Highsmith" },
-      { title: "Rebecca", author: "Daphne du Maurier" },
-      { title: "No Country for Old Men", author: "Cormac McCarthy" },
-      { title: "The Silence of the Lambs", author: "Thomas Harris" },
-      { title: "Frankenstein", author: "Mary Shelley" },
-      { title: "Blood Meridian", author: "Cormac McCarthy" },
-      { title: "The Picture of Dorian Gray", author: "Oscar Wilde" },
-      { title: "Dracula", author: "Bram Stoker" },
-      { title: "Gone Girl", author: "Gillian Flynn" },
-      { title: "Nineteen Eighty-Four", author: "George Orwell" },
-      { title: "A Clockwork Orange", author: "Anthony Burgess" },
-      { title: "The Shining", author: "Stephen King" },
-      { title: "Lord of the Flies", author: "William Golding" },
-      { title: "Misery", author: "Stephen King" },
-      { title: "Battle Royale", author: "Koushun Takami" },
-      { title: "Wuthering Heights", author: "Emily Brontë" },
-      { title: "Othello", author: "William Shakespeare" },
-      { title: "Paradise Lost", author: "John Milton" },
-      { title: "The Count of Monte Cristo", author: "Alexandre Dumas" },
-      { title: "Great Expectations", author: "Charles Dickens" },
-      { title: "Oliver Twist", author: "Charles Dickens" },
-      { title: "The Strange Case of Dr Jekyll and Mr Hyde", author: "Robert Louis Stevenson" },
-      { title: "Moby-Dick", author: "Herman Melville" },
-      { title: "The Phantom of the Opera", author: "Gaston Leroux" },
-      { title: "The Hound of the Baskervilles", author: "Arthur Conan Doyle" },
-      { title: "Heart of Darkness", author: "Joseph Conrad" },
-      { title: "The Turn of the Screw", author: "Henry James" },
-      { title: "One Flew Over the Cuckoo's Nest", author: "Ken Kesey" },
-      { title: "The Collector", author: "John Fowles" },
-      { title: "Rosemary's Baby", author: "Ira Levin" },
-      { title: "The Exorcist", author: "William Peter Blatty" },
-      { title: "The Omen", author: "David Seltzer" },
-      { title: "Carrie", author: "Stephen King" },
-      { title: "It", author: "Stephen King" },
-      { title: "Pet Sematary", author: "Stephen King" },
-      { title: "The Stand", author: "Stephen King" },
-      { title: "Hannibal", author: "Thomas Harris" },
-      { title: "Red Dragon", author: "Thomas Harris" },
-      { title: "The Girl with the Dragon Tattoo", author: "Stieg Larsson" },
-      { title: "Sharp Objects", author: "Gillian Flynn" },
-      { title: "The Secret History", author: "Donna Tartt" },
-      { title: "And Then There Were None", author: "Agatha Christie" },
-      { title: "The Murder of Roger Ackroyd", author: "Agatha Christie" },
-      { title: "In Cold Blood", author: "Truman Capote" },
-      { title: "The Talented Mr. Ripley", author: "Patricia Highsmith" },
-      { title: "A Good Man Is Hard to Find", author: "Flannery O'Connor" },
-      { title: "The Wasp Factory", author: "Iain Banks" },
-      { title: "Atonement", author: "Ian McEwan" },
-      { title: "Enduring Love", author: "Ian McEwan" },
-      { title: "The Comfort of Strangers", author: "Ian McEwan" },
-      { title: "The Haunting of Hill House", author: "Shirley Jackson" },
-      { title: "We Have Always Lived in the Castle", author: "Shirley Jackson" },
-      { title: "Something Wicked This Way Comes", author: "Ray Bradbury" },
-      { title: "The Island of Doctor Moreau", author: "H.G. Wells" },
-      { title: "The Invisible Man", author: "H.G. Wells" },
-      { title: "The War of the Worlds", author: "H.G. Wells" },
-      { title: "Do Androids Dream of Electric Sheep?", author: "Philip K. Dick" },
-      { title: "The Stepford Wives", author: "Ira Levin" },
-      { title: "The Boys from Brazil", author: "Ira Levin" },
-      { title: "Psycho", author: "Robert Bloch" },
-      { title: "The Phantom of the Opera", author: "Gaston Leroux" },
-      { title: "The Monk", author: "Matthew Lewis" },
-      { title: "The Castle of Otranto", author: "Horace Walpole" },
-      { title: "The Mysteries of Udolpho", author: "Ann Radcliffe" },
-      { title: "Northanger Abbey", author: "Jane Austen" },
-      { title: "Jane Eyre", author: "Charlotte Brontë" },
-      { title: "Villette", author: "Charlotte Brontë" },
-      { title: "The Woman in White", author: "Wilkie Collins" },
-      { title: "The Moonstone", author: "Wilkie Collins" },
-      { title: "Bleak House", author: "Charles Dickens" },
-      { title: "A Tale of Two Cities", author: "Charles Dickens" },
-      { title: "The Hunchback of Notre-Dame", author: "Victor Hugo" },
-      { title: "Les Misérables", author: "Victor Hugo" },
-      { title: "The Brothers Karamazov", author: "Fyodor Dostoevsky" },
-      { title: "Notes from Underground", author: "Fyodor Dostoevsky" },
-      { title: "Dead Souls", author: "Nikolai Gogol" },
-      { title: "Anna Karenina", author: "Leo Tolstoy" },
-      { title: "War and Peace", author: "Leo Tolstoy" },
-      { title: "The Master and Margarita", author: "Mikhail Bulgakov" },
-      { title: "Child of God", author: "Cormac McCarthy" },
-      { title: "Outer Dark", author: "Cormac McCarthy" },
-      { title: "The Road", author: "Cormac McCarthy" },
-      { title: "Under the Skin", author: "Michel Faber" },
-      { title: "The Dice Man", author: "Luke Rhinehart" },
-      { title: "Filth", author: "Irvine Welsh" },
-      { title: "Trainspotting", author: "Irvine Welsh" },
-      { title: "The Killer Inside Me", author: "Jim Thompson" },
-      { title: "The Getaway", author: "Jim Thompson" },
-      { title: "Clockers", author: "Richard Price" },
-      { title: "The Devil All the Time", author: "Donald Ray Pollock" },
-      { title: "Tampa", author: "Alissa Nutting" },
-      { title: "You", author: "Caroline Kepnes" },
-      { title: "My Year of Rest and Relaxation", author: "Ottessa Moshfegh" },
-      { title: "Apt Pupil", author: "Stephen King" },
-    ]
-  },
-  bbc: {
-    title: "BBC's 100 Novels That Shaped Our World",
-    source: "BBC",
-    year: "2019",
-    desc: "A celebration of fiction that has had a profound impact on culture, society and our understanding of what it means to be human.",
-    books: [
-      { title: "Frankenstein", author: "Mary Shelley" },
-      { title: "Jane Eyre", author: "Charlotte Brontë" },
-      { title: "Middlemarch", author: "George Eliot" },
-      { title: "The War of the Worlds", author: "H.G. Wells" },
-      { title: "The Great Gatsby", author: "F. Scott Fitzgerald" },
-      { title: "Mrs Dalloway", author: "Virginia Woolf" },
-      { title: "Brave New World", author: "Aldous Huxley" },
-      { title: "Their Eyes Were Watching God", author: "Zora Neale Hurston" },
-      { title: "The Second Sex", author: "Simone de Beauvoir" },
-      { title: "Nineteen Eighty-Four", author: "George Orwell" },
-      { title: "The Catcher in the Rye", author: "J.D. Salinger" },
-      { title: "Lord of the Flies", author: "William Golding" },
-      { title: "Lolita", author: "Vladimir Nabokov" },
-      { title: "To Kill a Mockingbird", author: "Harper Lee" },
-      { title: "One Hundred Years of Solitude", author: "Gabriel García Márquez" },
-      { title: "The Female Eunuch", author: "Germaine Greer" },
-      { title: "Watership Down", author: "Richard Adams" },
-      { title: "The Hitchhiker's Guide to the Galaxy", author: "Douglas Adams" },
-      { title: "If on a winter's night a traveler", author: "Italo Calvino" },
-      { title: "The Color Purple", author: "Alice Walker" },
-      { title: "Beloved", author: "Toni Morrison" },
-      { title: "A Room of One's Own", author: "Virginia Woolf" },
-      { title: "Things Fall Apart", author: "Chinua Achebe" },
-      { title: "A Clockwork Orange", author: "Anthony Burgess" },
-      { title: "Wide Sargasso Sea", author: "Jean Rhys" },
-      { title: "Midnight's Children", author: "Salman Rushdie" },
-      { title: "The Handmaid's Tale", author: "Margaret Atwood" },
-      { title: "The Remains of the Day", author: "Kazuo Ishiguro" },
-      { title: "Harry Potter and the Philosopher's Stone", author: "J.K. Rowling" },
-      { title: "The Curious Incident of the Dog in the Night-Time", author: "Mark Haddon" },
-      { title: "Ulysses", author: "James Joyce" },
-      { title: "In Search of Lost Time", author: "Marcel Proust" },
-      { title: "The Trial", author: "Franz Kafka" },
-      { title: "The Master and Margarita", author: "Mikhail Bulgakov" },
-      { title: "Invisible Man", author: "Ralph Ellison" },
-      { title: "On the Road", author: "Jack Kerouac" },
-      { title: "Catch-22", author: "Joseph Heller" },
-      { title: "One Flew Over the Cuckoo's Nest", author: "Ken Kesey" },
-      { title: "Slaughterhouse-Five", author: "Kurt Vonnegut" },
-      { title: "Song of Solomon", author: "Toni Morrison" },
-      { title: "Dracula", author: "Bram Stoker" },
-      { title: "Rebecca", author: "Daphne du Maurier" },
-      { title: "The Big Sleep", author: "Raymond Chandler" },
-      { title: "The Maltese Falcon", author: "Dashiell Hammett" },
-      { title: "And Then There Were None", author: "Agatha Christie" },
-      { title: "The Spy Who Came in from the Cold", author: "John le Carré" },
-      { title: "The Godfather", author: "Mario Puzo" },
-      { title: "Gone Girl", author: "Gillian Flynn" },
-      { title: "The Girl with the Dragon Tattoo", author: "Stieg Larsson" },
-      { title: "Bridget Jones's Diary", author: "Helen Fielding" },
-      { title: "Pride and Prejudice", author: "Jane Austen" },
-      { title: "Wuthering Heights", author: "Emily Brontë" },
-      { title: "Anna Karenina", author: "Leo Tolstoy" },
-      { title: "Gone with the Wind", author: "Margaret Mitchell" },
-      { title: "The Thorn Birds", author: "Colleen McCullough" },
-      { title: "Atonement", author: "Ian McEwan" },
-      { title: "Normal People", author: "Sally Rooney" },
-      { title: "A Suitable Boy", author: "Vikram Seth" },
-      { title: "Persepolis", author: "Marjane Satrapi" },
-      { title: "A Brief History of Seven Killings", author: "Marlon James" },
-      { title: "The Lord of the Rings", author: "J.R.R. Tolkien" },
-      { title: "The Lion, the Witch and the Wardrobe", author: "C.S. Lewis" },
-      { title: "Earthsea", author: "Ursula K. Le Guin" },
-      { title: "Jonathan Strange & Mr Norrell", author: "Susanna Clarke" },
-      { title: "The Hobbit", author: "J.R.R. Tolkien" },
-      { title: "His Dark Materials", author: "Philip Pullman" },
-      { title: "A Game of Thrones", author: "George R.R. Martin" },
-      { title: "Neuromancer", author: "William Gibson" },
-      { title: "Do Androids Dream of Electric Sheep?", author: "Philip K. Dick" },
-      { title: "The Left Hand of Darkness", author: "Ursula K. Le Guin" },
-      { title: "Dune", author: "Frank Herbert" },
-      { title: "The Day of the Triffids", author: "John Wyndham" },
-      { title: "2001: A Space Odyssey", author: "Arthur C. Clarke" },
-      { title: "I, Robot", author: "Isaac Asimov" },
-      { title: "Foundation", author: "Isaac Asimov" },
-      { title: "Kindred", author: "Octavia E. Butler" },
-      { title: "The Jungle Book", author: "Rudyard Kipling" },
-      { title: "Winnie-the-Pooh", author: "A.A. Milne" },
-      { title: "Alice's Adventures in Wonderland", author: "Lewis Carroll" },
-      { title: "Charlie and the Chocolate Factory", author: "Roald Dahl" },
-      { title: "Noughts & Crosses", author: "Malorie Blackman" },
-      { title: "The Diary of a Young Girl", author: "Anne Frank" },
-      { title: "Pippi Longstocking", author: "Astrid Lindgren" },
-      { title: "Northern Lights", author: "Philip Pullman" },
-      { title: "Little Women", author: "Louisa May Alcott" },
-      { title: "Charlotte's Web", author: "E.B. White" },
-      { title: "The Wind in the Willows", author: "Kenneth Grahame" },
-      { title: "Treasure Island", author: "Robert Louis Stevenson" },
-      { title: "Black Beauty", author: "Anna Sewell" },
-      { title: "The Secret Garden", author: "Frances Hodgson Burnett" },
-      { title: "A Little Princess", author: "Frances Hodgson Burnett" },
-      { title: "The Railway Children", author: "E. Nesbit" },
-      { title: "Swallows and Amazons", author: "Arthur Ransome" },
-      { title: "Ballet Shoes", author: "Noel Streatfeild" },
-      { title: "The Borrowers", author: "Mary Norton" },
-      { title: "The Phantom Tollbooth", author: "Norton Juster" },
-      { title: "The Outsiders", author: "S.E. Hinton" },
-      { title: "Roll of Thunder, Hear My Cry", author: "Mildred D. Taylor" },
-      { title: "Wolf Hall", author: "Hilary Mantel" },
-      { title: "White Teeth", author: "Zadie Smith" },
-    ]
-  },
-  time: {
-    title: "TIME's 100 Best Novels",
-    source: "TIME Magazine",
-    year: "2005",
-    desc: "TIME critics Lev Grossman and Richard Lacayo's picks for the 100 best English-language novels from 1923 to the present.",
-    books: [
-      { title: "Beloved", author: "Toni Morrison" },
-      { title: "The Complete Stories", author: "Flannery O'Connor" },
-      { title: "The Corrections", author: "Jonathan Franzen" },
-      { title: "The Stories of John Cheever", author: "John Cheever" },
-      { title: "At Swim-Two-Birds", author: "Flann O'Brien" },
-      { title: "Atonement", author: "Ian McEwan" },
-      { title: "Blood Meridian", author: "Cormac McCarthy" },
-      { title: "Catch-22", author: "Joseph Heller" },
-      { title: "A Clockwork Orange", author: "Anthony Burgess" },
-      { title: "The Crying of Lot 49", author: "Thomas Pynchon" },
-      { title: "Slaughterhouse-Five", author: "Kurt Vonnegut" },
-      { title: "To Kill a Mockingbird", author: "Harper Lee" },
-      { title: "White Noise", author: "Don DeLillo" },
-      { title: "The Lord of the Rings", author: "J.R.R. Tolkien" },
-      { title: "Never Let Me Go", author: "Kazuo Ishiguro" },
-      { title: "Lolita", author: "Vladimir Nabokov" },
-      { title: "The Remains of the Day", author: "Kazuo Ishiguro" },
-      { title: "American Pastoral", author: "Philip Roth" },
-      { title: "Midnight's Children", author: "Salman Rushdie" },
-      { title: "The Road", author: "Cormac McCarthy" },
-      { title: "The Great Gatsby", author: "F. Scott Fitzgerald" },
-      { title: "A Handful of Dust", author: "Evelyn Waugh" },
-      { title: "A House for Mr Biswas", author: "V.S. Naipaul" },
-      { title: "In Search of Lost Time", author: "Marcel Proust" },
-      { title: "Invisible Man", author: "Ralph Ellison" },
-      { title: "Light in August", author: "William Faulkner" },
-      { title: "The Lion, the Witch and the Wardrobe", author: "C.S. Lewis" },
-      { title: "Money", author: "Martin Amis" },
-      { title: "The Moviegoer", author: "Walker Percy" },
-      { title: "Mrs Dalloway", author: "Virginia Woolf" },
-      { title: "Naked Lunch", author: "William S. Burroughs" },
-      { title: "Native Son", author: "Richard Wright" },
-      { title: "Neuromancer", author: "William Gibson" },
-      { title: "On the Road", author: "Jack Kerouac" },
-      { title: "One Flew Over the Cuckoo's Nest", author: "Ken Kesey" },
-      { title: "The Painted Bird", author: "Jerzy Kosiński" },
-      { title: "Pale Fire", author: "Vladimir Nabokov" },
-      { title: "A Passage to India", author: "E.M. Forster" },
-      { title: "Play It as It Lays", author: "Joan Didion" },
-      { title: "Portnoy's Complaint", author: "Philip Roth" },
-      { title: "Possession", author: "A.S. Byatt" },
-      { title: "The Power and the Glory", author: "Graham Greene" },
-      { title: "The Prime of Miss Jean Brodie", author: "Muriel Spark" },
-      { title: "Rabbit, Run", author: "John Updike" },
-      { title: "Ragtime", author: "E.L. Doctorow" },
-      { title: "The Recognitions", author: "William Gaddis" },
-      { title: "Revolutionary Road", author: "Richard Yates" },
-      { title: "The Sheltering Sky", author: "Paul Bowles" },
-      { title: "Snow Crash", author: "Neal Stephenson" },
-      { title: "The Sot-Weed Factor", author: "John Barth" },
-      { title: "The Sound and the Fury", author: "William Faulkner" },
-      { title: "The Spy Who Came in from the Cold", author: "John le Carré" },
-      { title: "The Sun Also Rises", author: "Ernest Hemingway" },
-      { title: "Their Eyes Were Watching God", author: "Zora Neale Hurston" },
-      { title: "Things Fall Apart", author: "Chinua Achebe" },
-      { title: "To the Lighthouse", author: "Virginia Woolf" },
-      { title: "Tropic of Cancer", author: "Henry Miller" },
-      { title: "Ubik", author: "Philip K. Dick" },
-      { title: "Under the Net", author: "Iris Murdoch" },
-      { title: "Under the Volcano", author: "Malcolm Lowry" },
-      { title: "Watchmen", author: "Alan Moore" },
-      { title: "White Teeth", author: "Zadie Smith" },
-      { title: "Wide Sargasso Sea", author: "Jean Rhys" },
-      { title: "Winesburg, Ohio", author: "Sherwood Anderson" },
-      { title: "The Wings of the Dove", author: "Henry James" },
-      { title: "Women in Love", author: "D.H. Lawrence" },
-      { title: "An American Tragedy", author: "Theodore Dreiser" },
-      { title: "Animal Farm", author: "George Orwell" },
-      { title: "Are You There God? It's Me, Margaret", author: "Judy Blume" },
-      { title: "Brideshead Revisited", author: "Evelyn Waugh" },
-      { title: "The Bridge of San Luis Rey", author: "Thornton Wilder" },
-      { title: "Call It Sleep", author: "Henry Roth" },
-      { title: "A Death in the Family", author: "James Agee" },
-      { title: "The Death of the Heart", author: "Elizabeth Bowen" },
-      { title: "Deliverance", author: "James Dickey" },
-      { title: "Dog Soldiers", author: "Robert Stone" },
-      { title: "Falconer", author: "John Cheever" },
-      { title: "The French Lieutenant's Woman", author: "John Fowles" },
-      { title: "The Golden Notebook", author: "Doris Lessing" },
-      { title: "Go Tell It on the Mountain", author: "James Baldwin" },
-      { title: "Gone with the Wind", author: "Margaret Mitchell" },
-      { title: "Gravity's Rainbow", author: "Thomas Pynchon" },
-      { title: "The Grapes of Wrath", author: "John Steinbeck" },
-      { title: "The Heart Is a Lonely Hunter", author: "Carson McCullers" },
-      { title: "The Heart of the Matter", author: "Graham Greene" },
-      { title: "Herzog", author: "Saul Bellow" },
-      { title: "Housekeeping", author: "Marilynne Robinson" },
-      { title: "I, Claudius", author: "Robert Graves" },
-      { title: "Infinite Jest", author: "David Foster Wallace" },
-      { title: "The Jungle", author: "Upton Sinclair" },
-      { title: "1984", author: "George Orwell" },
-      { title: "Brave New World", author: "Aldous Huxley" },
-      { title: "Darkness at Noon", author: "Arthur Koestler" },
-      { title: "The Day of the Locust", author: "Nathanael West" },
-      { title: "Lord of the Flies", author: "William Golding" },
-      { title: "Lucky Jim", author: "Kingsley Amis" },
-      { title: "The Man Who Loved Children", author: "Christina Stead" },
-      { title: "Loving", author: "Henry Green" },
-      { title: "Ulysses", author: "James Joyce" },
-      { title: "U.S.A. Trilogy", author: "John Dos Passos" },
-    ]
-  },
-  guardian: {
-    title: "The Guardian's 100 Best Novels",
-    source: "The Guardian",
-    year: "2015",
-    desc: "Robert McCrum's selection of the finest novels written in English, from Robinson Crusoe to American Pastoral. A journey through 300 years of the English-language novel.",
-    books: [
-      { title: "The Pilgrim's Progress", author: "John Bunyan" },
-      { title: "Robinson Crusoe", author: "Daniel Defoe" },
-      { title: "Gulliver's Travels", author: "Jonathan Swift" },
-      { title: "Clarissa", author: "Samuel Richardson" },
-      { title: "Tom Jones", author: "Henry Fielding" },
-      { title: "The Life and Opinions of Tristram Shandy", author: "Laurence Sterne" },
-      { title: "Emma", author: "Jane Austen" },
-      { title: "Frankenstein", author: "Mary Shelley" },
-      { title: "The Narrative of Arthur Gordon Pym", author: "Edgar Allan Poe" },
-      { title: "Vanity Fair", author: "William Makepeace Thackeray" },
-      { title: "Jane Eyre", author: "Charlotte Brontë" },
-      { title: "David Copperfield", author: "Charles Dickens" },
-      { title: "Moby-Dick", author: "Herman Melville" },
-      { title: "Middlemarch", author: "George Eliot" },
-      { title: "The Adventures of Huckleberry Finn", author: "Mark Twain" },
-      { title: "The Picture of Dorian Gray", author: "Oscar Wilde" },
-      { title: "The Sign of Four", author: "Arthur Conan Doyle" },
-      { title: "Jude the Obscure", author: "Thomas Hardy" },
-      { title: "The Turn of the Screw", author: "Henry James" },
-      { title: "Heart of Darkness", author: "Joseph Conrad" },
-      { title: "Wuthering Heights", author: "Emily Brontë" },
-      { title: "The Scarlet Letter", author: "Nathaniel Hawthorne" },
-      { title: "Alice's Adventures in Wonderland", author: "Lewis Carroll" },
-      { title: "Little Women", author: "Louisa May Alcott" },
-      { title: "The Way We Live Now", author: "Anthony Trollope" },
-      { title: "The Woman in White", author: "Wilkie Collins" },
-      { title: "Great Expectations", author: "Charles Dickens" },
-      { title: "Silas Marner", author: "George Eliot" },
-      { title: "Bleak House", author: "Charles Dickens" },
-      { title: "Treasure Island", author: "Robert Louis Stevenson" },
-      { title: "Kim", author: "Rudyard Kipling" },
-      { title: "The Wonderful Wizard of Oz", author: "L. Frank Baum" },
-      { title: "The Hound of the Baskervilles", author: "Arthur Conan Doyle" },
-      { title: "The Call of the Wild", author: "Jack London" },
-      { title: "The Golden Bowl", author: "Henry James" },
-      { title: "The Wind in the Willows", author: "Kenneth Grahame" },
-      { title: "The Secret Agent", author: "Joseph Conrad" },
-      { title: "A Room with a View", author: "E.M. Forster" },
-      { title: "The Secret Garden", author: "Frances Hodgson Burnett" },
-      { title: "Sons and Lovers", author: "D.H. Lawrence" },
-      { title: "The Good Soldier", author: "Ford Madox Ford" },
-      { title: "The Thirty-Nine Steps", author: "John Buchan" },
-      { title: "The Age of Innocence", author: "Edith Wharton" },
-      { title: "Ulysses", author: "James Joyce" },
-      { title: "A Passage to India", author: "E.M. Forster" },
-      { title: "The Great Gatsby", author: "F. Scott Fitzgerald" },
-      { title: "Mrs Dalloway", author: "Virginia Woolf" },
-      { title: "The Sun Also Rises", author: "Ernest Hemingway" },
-      { title: "To the Lighthouse", author: "Virginia Woolf" },
-      { title: "Orlando", author: "Virginia Woolf" },
-      { title: "As I Lay Dying", author: "William Faulkner" },
-      { title: "Brave New World", author: "Aldous Huxley" },
-      { title: "Cold Comfort Farm", author: "Stella Gibbons" },
-      { title: "Scoop", author: "Evelyn Waugh" },
-      { title: "The Big Sleep", author: "Raymond Chandler" },
-      { title: "Party Going", author: "Henry Green" },
-      { title: "At Swim-Two-Birds", author: "Flann O'Brien" },
-      { title: "The Grapes of Wrath", author: "John Steinbeck" },
-      { title: "Joy in the Morning", author: "P.G. Wodehouse" },
-      { title: "All the King's Men", author: "Robert Penn Warren" },
-      { title: "Under the Volcano", author: "Malcolm Lowry" },
-      { title: "Nineteen Eighty-Four", author: "George Orwell" },
-      { title: "The End of the Affair", author: "Graham Greene" },
-      { title: "The Catcher in the Rye", author: "J.D. Salinger" },
-      { title: "The Adventures of Augie March", author: "Saul Bellow" },
-      { title: "Lord of the Flies", author: "William Golding" },
-      { title: "Lolita", author: "Vladimir Nabokov" },
-      { title: "On the Road", author: "Jack Kerouac" },
-      { title: "Voss", author: "Patrick White" },
-      { title: "To Kill a Mockingbird", author: "Harper Lee" },
-      { title: "The Prime of Miss Jean Brodie", author: "Muriel Spark" },
-      { title: "Catch-22", author: "Joseph Heller" },
-      { title: "A Clockwork Orange", author: "Anthony Burgess" },
-      { title: "A Single Man", author: "Christopher Isherwood" },
-      { title: "In Cold Blood", author: "Truman Capote" },
-      { title: "The Bell Jar", author: "Sylvia Plath" },
-      { title: "Portnoy's Complaint", author: "Philip Roth" },
-      { title: "Mrs Palfrey at the Claremont", author: "Elizabeth Taylor" },
-      { title: "Rabbit Redux", author: "John Updike" },
-      { title: "Song of Solomon", author: "Toni Morrison" },
-      { title: "A Bend in the River", author: "V.S. Naipaul" },
-      { title: "Midnight's Children", author: "Salman Rushdie" },
-      { title: "Housekeeping", author: "Marilynne Robinson" },
-      { title: "Money", author: "Martin Amis" },
-      { title: "An Artist of the Floating World", author: "Kazuo Ishiguro" },
-      { title: "The Beginning of Spring", author: "Penelope Fitzgerald" },
-      { title: "Possession", author: "A.S. Byatt" },
-      { title: "Amongst Women", author: "John McGahern" },
-      { title: "Underworld", author: "Don DeLillo" },
-      { title: "Disgrace", author: "J.M. Coetzee" },
-      { title: "True History of the Kelly Gang", author: "Peter Carey" },
-      { title: "The Corrections", author: "Jonathan Franzen" },
-      { title: "Atonement", author: "Ian McEwan" },
-      { title: "Fingersmith", author: "Sarah Waters" },
-      { title: "The Known World", author: "Edward P. Jones" },
-      { title: "Small Island", author: "Andrea Levy" },
-      { title: "Never Let Me Go", author: "Kazuo Ishiguro" },
-      { title: "The Brief Wondrous Life of Oscar Wao", author: "Junot Díaz" },
-      { title: "Wolf Hall", author: "Hilary Mantel" },
-      { title: "American Pastoral", author: "Philip Roth" },
-    ]
-  }
-};
 
 // Get a list by ID — tries cache (Supabase) first, falls back to offline data
 function getListData(listId) {
@@ -1049,1190 +407,7 @@ function getListData(listId) {
   return listsCache[listId] || null;
 }
 
-// ─── BOOK SEARCH & COVERS ───────────────────────────────────────────────
-// Primary: Open Library (free, no key, great for novels)
-// Covers: Open Library covers by ISBN/OLID → Wikipedia → Google Books fallback
-const OL = 'https://openlibrary.org';
-
-// ─── UTILITY ────────────────────────────────────────────────────────────
-function relativeDate(str) {
-  if (!str) return '';
-  // Handle "MMM YYYY" format stored by toggleRead
-  const my = str.match(/^(\w{3})\s+(\d{4})$/);
-  const date = my ? new Date(`${my[1]} 1, ${my[2]}`) : new Date(str);
-  if (isNaN(date)) return str;
-  const days = Math.floor((Date.now() - date) / 86400000);
-  if (days < 1)  return 'today';
-  if (days < 7)  return `${days}d ago`;
-  if (days < 30) return `~${Math.round(days / 7)}w ago`;
-  if (days < 365) return `~${Math.round(days / 30)}mo ago`;
-  return `~${Math.round(days / 365)}y ago`;
-}
-
-function normalizeText(s = '') {
-  return s
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function similarity(a = '', b = '') {
-  const aa = normalizeText(a);
-  const bb = normalizeText(b);
-  if (!aa && !bb) return 1;
-  if (aa === bb) return 1;
-  // Simple token overlap for speed
-  const tokA = new Set(aa.split(' '));
-  const tokB = new Set(bb.split(' '));
-  let overlap = 0;
-  for (const t of tokA) if (tokB.has(t)) overlap++;
-  return overlap / Math.max(tokA.size, tokB.size, 1);
-}
-
-// ─── OPEN LIBRARY SEARCH ────────────────────────────────────────────────
-function normalizeOLBook(doc) {
-  const coverId = doc.cover_i || null;
-  const coverUrl = coverId ? `https://covers.openlibrary.org/b/id/${coverId}-L.jpg` : null;
-  return {
-    key: doc.key?.replace('/works/', '') || doc.edition_key?.[0] || doc.title,
-    title: doc.title || 'Unknown Title',
-    author: doc.author_name?.[0] || 'Unknown Author',
-    coverUrl,
-    year: doc.first_publish_year?.toString() || '',
-    pages: doc.number_of_pages_median || null,
-    description: '',
-    categories: doc.subject?.slice(0, 5) || [],
-    language: doc.language?.[0] || 'eng',
-    isbn: doc.isbn?.[0] || null,
-    olKey: doc.key || null,
-  };
-}
-
-// Verified recent/regional releases that the public catalog APIs do not expose
-// reliably. These still flow through the normal ranking and book-detail UI.
-const SUPPLEMENTAL_BOOKS = [
-  {
-    key: 'jNowEQAAQBAJ',
-    title: 'De slag om Rust en Vreugd',
-    author: 'Hendrik Groen',
-    coverUrl: 'https://books.google.com/books/content?id=jNowEQAAQBAJ&printsec=frontcover&img=1&zoom=3&source=gbs_api',
-    year: '2025',
-    pages: 240,
-    description: '',
-    categories: ['Fiction'],
-    language: 'nl',
-    isbn: '9789089683137',
-  },
-];
-
-function searchSupplementalBooks(query) {
-  const normalizedQuery = normalizeText(query);
-  if (!normalizedQuery) return [];
-  const tokens = normalizedQuery.split(' ').filter(Boolean);
-  return SUPPLEMENTAL_BOOKS.filter(book => {
-    const title = normalizeText(book.title);
-    const author = normalizeText(book.author);
-    const isbn = String(book.isbn || '').replace(/[^0-9X]/gi, '');
-    const compactQuery = normalizedQuery.replace(/\s/g, '');
-    return title.includes(normalizedQuery)
-      || author.includes(normalizedQuery)
-      || normalizedQuery.includes(title)
-      || (isbn && isbn === compactQuery)
-      || (tokens.length > 1 && tokens.every(token => title.includes(token) || author.includes(token)));
-  });
-}
-
-// ─── OL WORK RESOLUTION ─────────────────────────────────────────────────
-const olWorkCache = {};
-
-function stripSubtitle(title) {
-  return (title || '')
-    .replace(/\s*\(.*?\)\s*$/, '')
-    .replace(/\s*:\s*.+$/, '')
-    .trim();
-}
-
-async function resolveToOLWork(book) {
-  if (/^OL\d+W$/.test(book.key)) return book;
-  if (olWorkCache[book.key]) return { ...book, ...olWorkCache[book.key] };
-
-  let workId = null;
-
-  // OL-sourced books already carry olKey = '/works/OL...W'
-  if (book.olKey) {
-    const m = book.olKey.match(/\/works\/(OL\d+W)/);
-    if (m) workId = m[1];
-  }
-
-  // ISBN lookup — most reliable cross-reference
-  if (!workId && book.isbn) {
-    try {
-      const r = await fetch(`${OL}/isbn/${book.isbn}.json`);
-      if (r.ok) {
-        const d = await r.json();
-        const wk = d.works?.[0]?.key;
-        if (wk) workId = wk.replace('/works/', '');
-      }
-    } catch {}
-  }
-
-  // Title + author search fallback
-  if (!workId) {
-    try {
-      const r = await fetch(
-        `${OL}/search.json?title=${encodeURIComponent(book.title)}&author=${encodeURIComponent(book.author)}&limit=1`
-      );
-      if (r.ok) {
-        const d = await r.json();
-        const wk = d.docs?.[0]?.key;
-        if (wk) workId = wk.replace('/works/', '');
-      }
-    } catch {}
-  }
-
-  if (!workId) return book;
-  const patch = { key: workId, olWorkId: workId };
-  olWorkCache[book.key] = patch;
-  return { ...book, ...patch };
-}
-
-async function migrateBookKey(oldKey, newKey) {
-  if (oldKey === newKey) return;
-
-  if (state.readBooks[oldKey] && !state.readBooks[newKey]) {
-    state.readBooks[newKey] = { ...state.readBooks[oldKey], key: newKey };
-    delete state.readBooks[oldKey];
-  }
-  if (state.ratings[oldKey] !== undefined && state.ratings[newKey] === undefined) {
-    state.ratings[newKey] = state.ratings[oldKey];
-    delete state.ratings[oldKey];
-  }
-  if (state.wishlist[oldKey] && !state.wishlist[newKey]) {
-    state.wishlist[newKey] = { ...state.wishlist[oldKey], key: newKey };
-    delete state.wishlist[oldKey];
-  }
-  state.favorites = state.favorites.map(f => f.key === oldKey ? { ...f, key: newKey } : f);
-
-  if (state.user && sb) {
-    const uid = state.user.id;
-    for (const table of ['read_books', 'ratings', 'favorites', 'wishlist', 'reviews']) {
-      sb.from(table).update({ book_key: newKey }).eq('user_id', uid).eq('book_key', oldKey)
-        .then(() => {}).catch(() => {});
-    }
-  }
-}
-
-async function fetchFromOL(trimmed, byMatch, limit) {
-  let olUrl;
-  if (byMatch) {
-    olUrl = `${OL}/search.json?title=${encodeURIComponent(byMatch[1].trim())}&author=${encodeURIComponent(byMatch[2].trim())}&limit=${limit}`;
-  } else {
-    olUrl = `${OL}/search.json?q=${encodeURIComponent(trimmed)}&limit=${limit * 2}`;
-  }
-  const res = await fetch(olUrl);
-  if (!res.ok) return [];
-  const data = await res.json();
-  return (data.docs || []).filter(d => d.title).map(normalizeOLBook);
-}
-
-async function fetchExactTitleFromOL(title, limit) {
-  const res = await fetch(`${OL}/search.json?title=${encodeURIComponent(title)}&limit=${limit}`);
-  if (!res.ok) return [];
-  const data = await res.json();
-  return (data.docs || []).filter(d => d.title).map(normalizeOLBook);
-}
-
-async function searchBooks(query, limit = 20) {
-  const trimmed = query.trim();
-  if (!trimmed) return [];
-  const byMatch = trimmed.match(/^(.+?)\s+by\s+(.+)$/i);
-
-  const broadResults = await Promise.allSettled([
-    fetchFromOL(trimmed, byMatch, limit),
-    searchBooksGoogle(trimmed, limit),
-  ]);
-
-  let providerBooks = [
-    ...searchSupplementalBooks(trimmed),
-    ...broadResults.flatMap(result => result.value || []),
-  ];
-  const normalizedQuery = normalizeText(trimmed.replace(/^intitle:/i, ''));
-  const queryTokens = normalizedQuery.split(' ').filter(Boolean);
-  const hasStrongMatch = providerBooks.some(book => {
-    const title = normalizeText(book.title);
-    const author = normalizeText(book.author);
-    const titleTokens = new Set(title.split(' '));
-    const coverage = queryTokens.filter(token => titleTokens.has(token)).length / Math.max(queryTokens.length, 1);
-    return title === normalizedQuery || author === normalizedQuery || coverage >= .8;
-  });
-
-  // Broad catalog search can miss recent regional editions. Only pay for these
-  // focused requests when the first pass did not find a convincing match.
-  if (!hasStrongMatch && queryTokens.length > 1) {
-    const exactResults = await Promise.allSettled([
-      fetchExactTitleFromOL(trimmed, limit),
-      searchBooksGoogle(`intitle:${trimmed}`, limit),
-    ]);
-    providerBooks.push(...exactResults.flatMap(result => result.value || []));
-  }
-
-  const seenBooks = new Set();
-  const results = [];
-  for (const book of providerBooks) {
-    const identity = `${normalizeText(book.title)}|${normalizeText(book.author)}`;
-    if (!seenBooks.has(identity)) {
-      seenBooks.add(identity);
-      results.push(book);
-    }
-  }
-
-  // Both providers return results in their own order. Re-rank the merged set so
-  // exact and near-exact titles win, including newer non-English books.
-  return results
-    .map((book, providerIndex) => {
-      const title = normalizeText(book.title);
-      const author = normalizeText(book.author);
-      const titleTokens = new Set(title.split(' '));
-      const matchedTokens = queryTokens.filter(token => titleTokens.has(token)).length;
-      let score = matchedTokens / Math.max(queryTokens.length, 1) * 60;
-      if (title === normalizedQuery) score += 120;
-      else if (title.startsWith(normalizedQuery)) score += 75;
-      else if (title.includes(normalizedQuery)) score += 45;
-      if (author === normalizedQuery) score += 95;
-      else if (author.includes(normalizedQuery)) score += 35;
-      if (book.coverUrl) score += 8;
-      if (book.year) score += 2;
-      score -= providerIndex * .01;
-      return { book, score };
-    })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map(result => result.book);
-}
-
-// Google Books fallback search — startIndex enables pagination (40 results per page max)
-async function searchBooksGoogle(query, limit = 20, startIndex = 0) {
-  try {
-    const maxResults = Math.min(Math.max(limit, 1), 40);
-    const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=${maxResults}&printType=books&orderBy=relevance&startIndex=${startIndex}`;
-    const res = await fetch(url);
-    if (!res.ok) return [];
-    const data = await res.json();
-    return (data.items || [])
-      .filter(item => {
-        const info = item.volumeInfo || {};
-        if (info.printType && info.printType !== 'BOOK') return false;
-        return !!info.title;
-      })
-      .slice(0, limit)
-      .map(item => {
-        const info = item.volumeInfo || {};
-        const base = info.imageLinks?.large || info.imageLinks?.medium || info.imageLinks?.thumbnail || '';
-        const coverUrl = base ? base.replace('http://', 'https://').replace('&edge=curl', '').replace(/zoom=\d+/g, 'zoom=3') : null;
-        return {
-          key: item.id,
-          title: info.title || 'Unknown Title',
-          author: info.authors?.[0] || 'Unknown Author',
-          coverUrl,
-          year: info.publishedDate?.substring(0, 4) || '',
-          pages: info.pageCount || null,
-          description: info.description || '',
-          categories: info.categories || [],
-          language: info.language || '',
-        };
-      });
-  } catch { return []; }
-}
-
-// ─── COVER CACHE ─────────────────────────────────────────────────────────
-const coverMemCache = {};
-
-async function getCachedCover(title, author) {
-  author = author || '';
-  const key = (title + '||' + author).toLowerCase();
-  if (coverMemCache[key]) return coverMemCache[key];
-  if (!sb) return null;
-  try {
-    const { data } = await sb
-      .from('book_cover_cache')
-      .select('cover_url, book_key, year')
-      .eq('title_lower', title.toLowerCase())
-      .eq('author_lower', author.toLowerCase())
-      .maybeSingle();
-    if (data?.cover_url) {
-      const result = { key: data.book_key || title, title, author, coverUrl: data.cover_url, year: data.year || '' };
-      coverMemCache[key] = result;
-      return result;
-    }
-  } catch (e) { /* ignore cache miss */ }
-  return null;
-}
-
-async function saveCoverToCache(title, author, coverUrl, bookKey, year) {
-  const key = (title + '||' + author).toLowerCase();
-  const result = { key: bookKey || title, title, author, coverUrl, year: year || '' };
-  coverMemCache[key] = result;
-  if (!sb || !coverUrl) return;
-  try {
-    await sb.from('book_cover_cache').upsert({
-      title_lower: title.toLowerCase(),
-      author_lower: author.toLowerCase(),
-      cover_url: coverUrl,
-      book_key: bookKey || title,
-      year: year || '',
-    }, { onConflict: 'title_lower,author_lower' });
-  } catch (e) { /* ignore cache write failure */ }
-}
-
-// ─── COVER LOOKUP: OL → Wikipedia → Google ──────────────────────────────
-async function searchBooksForList(title, author) {
-  author = author || '';
-  // Check cache first
-  const cached = await getCachedCover(title, author);
-  if (cached) return cached;
-
-  let book = null;
-
-  // 1. Try Open Library search
-  try {
-    const olUrl = `${OL}/search.json?title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}&limit=3&language=eng`;
-    const res = await fetch(olUrl);
-    if (res.ok) {
-      const data = await res.json();
-      // Find best match
-      for (const doc of (data.docs || [])) {
-        if (!doc.title) continue;
-        const titleSim = similarity(doc.title, title);
-        if (titleSim > 0.4 || normalizeText(doc.title).includes(normalizeText(title))) {
-          book = normalizeOLBook(doc);
-          break;
-        }
-      }
-    }
-  } catch { /* ignore */ }
-
-  // 2. If no cover from OL, try Wikipedia
-  if (!book?.coverUrl) {
-    const wikiCover = await getWikipediaCover(title, author);
-    if (wikiCover) {
-      if (book) {
-        book.coverUrl = wikiCover;
-      } else {
-        book = { key: title, title, author, coverUrl: wikiCover, year: '' };
-      }
-    }
-  }
-
-  // 3. Last resort: Google Books
-  if (!book?.coverUrl) {
-    try {
-      const q = `intitle:"${title}" inauthor:"${author}"`;
-      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=5&printType=books&langRestrict=en`;
-      const res = await fetch(url);
-      if (res.ok && res.status !== 429) {
-        const data = await res.json();
-        const item = (data.items || [])[0];
-        if (item) {
-          const info = item.volumeInfo || {};
-          const base = info.imageLinks?.large || info.imageLinks?.medium || info.imageLinks?.thumbnail || '';
-          const gCover = base ? base.replace('http://', 'https://').replace('&edge=curl', '').replace(/zoom=\d+/g, 'zoom=3') : null;
-          if (gCover) {
-            if (book) {
-              book.coverUrl = gCover;
-              if (!book.year) book.year = info.publishedDate?.substring(0, 4) || '';
-            } else {
-              book = {
-                key: item.id, title, author, coverUrl: gCover,
-                year: info.publishedDate?.substring(0, 4) || '',
-                pages: info.pageCount || null,
-                description: info.description || '', categories: info.categories || [],
-              };
-            }
-          }
-        }
-      }
-    } catch { /* ignore */ }
-  }
-
-  // Fallback: no cover found anywhere
-  if (!book) {
-    book = { key: title, title, author, coverUrl: null, year: '' };
-  }
-
-  // Save to cache for future loads
-  if (book.coverUrl) {
-    saveCoverToCache(title, author, book.coverUrl, book.key, book.year);
-  }
-
-  return book;
-}
-
-const GENRE_SUBJECTS = {
-  'fantasy':           'fantasy',
-  'thriller':          'thriller',
-  'romance':           'romance',
-  'biography':         'biography',
-  'history':           'history',
-  'philosophy':        'philosophy',
-  'self-help':         'self_help',
-  'horror':            'horror',
-  'comics':            'comics',
-  'classic literature':'classics',
-  'science fiction':   'science_fiction',
-  'popular books':     'bestsellers',
-};
-
-async function fetchOLSubject(subject, limit = 100, offset = 0, sort = 'editions', minYear = null) {
-  const fields = 'key,title,author_name,cover_i,first_publish_year,number_of_pages_median,subject,language,isbn,edition_key';
-  const catalogueFilter = minYear
-    ? `q=${encodeURIComponent(`subject:${subject} first_publish_year:[${minYear} TO ${new Date().getFullYear()}]`)}`
-    : `subject=${encodeURIComponent(subject)}`;
-  const url = `${OL}/search.json?${catalogueFilter}&sort=${encodeURIComponent(sort)}&fields=${encodeURIComponent(fields)}&limit=${limit}&offset=${offset}`;
-  const res = await fetch(url);
-  if (!res.ok) return [];
-  const data = await res.json();
-  return (data.docs || []).filter(d => d.title).map(normalizeOLBook);
-}
-
-function withTimeout(promise, ms) {
-  return Promise.race([promise, new Promise(resolve => setTimeout(() => resolve([]), ms))]);
-}
-
-async function fetchOLTrending(limit = 100) {
-  const url = `${OL}/trending/monthly.json?limit=${limit}`;
-  const res = await fetch(url);
-  if (!res.ok) return [];
-  const data = await res.json();
-  return (data.works || []).filter(w => w.title).map(w => ({
-    key: w.key?.replace('/works/', '') || w.title,
-    title: w.title,
-    author: (w.author_name || [])[0] || 'Unknown Author',
-    coverUrl: w.cover_id ? `https://covers.openlibrary.org/b/id/${w.cover_id}-L.jpg` : null,
-    year: w.first_publish_year?.toString() || '',
-    pages: null,
-    description: '',
-    categories: [],
-    language: 'eng',
-    isbn: null,
-    olKey: w.key || null,
-  }));
-}
-
-async function getCuratedShelf(titles) {
-  const results = await Promise.allSettled(
-    titles.map(async ({ title, author }) => {
-      try {
-        return await searchBooksForList(title, author);
-      } catch {
-        return { key: title, title, author, coverUrl: null, year: '' };
-      }
-    })
-  );
-  return results.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
-}
-
-// Wikipedia cover — searches for the book article and grabs the page image
-async function getWikipediaCover(title, author) {
-  try {
-    // Step 1: Search Wikipedia for the article
-    const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(title + ' ' + author + ' novel')}&srlimit=3&format=json&origin=*`;
-    const searchRes = await fetch(searchUrl);
-    const searchData = await searchRes.json();
-    const articles = searchData.query?.search || [];
-
-    // Find the best matching article
-    let bestTitle = null;
-    for (const article of articles) {
-      const normArticle = normalizeText(article.title);
-      const normTarget = normalizeText(title);
-      if (normArticle.includes(normTarget) || normTarget.includes(normArticle) || similarity(article.title, title) > 0.5) {
-        bestTitle = article.title;
-        break;
-      }
-    }
-    // Fallback: just use first result
-    if (!bestTitle && articles.length) bestTitle = articles[0].title;
-    if (!bestTitle) return null;
-
-    // Step 2: Get the page image
-    const imgUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(bestTitle)}&prop=pageimages&format=json&pithumbsize=500&origin=*`;
-    const imgRes = await fetch(imgUrl);
-    const imgData = await imgRes.json();
-    const pages = Object.values(imgData.query?.pages || {});
-    const img = pages[0]?.thumbnail?.source;
-    return img || null;
-  } catch { return null; }
-}
-
-function coverUrl(idOrUrl, size = 'M') {
-  if (!idOrUrl) return null;
-  if (idOrUrl.startsWith('http')) return idOrUrl;
-  return `https://covers.openlibrary.org/b/id/${idOrUrl}-${size}.jpg`;
-}
-
-// ─── ADMIN: COVER MANAGEMENT ───────────────────────────────────────────
-async function adminUpdateCover(title, author, newCoverUrl, bookKey, year) {
-  if (!state.isAdmin) return;
-  // Update in-memory cache
-  const key = (title + '||' + author).toLowerCase();
-  coverMemCache[key] = { key: bookKey || title, title, author, coverUrl: newCoverUrl, year: year || '' };
-  // Update Supabase cache
-  if (sb) {
-    await sb.from('book_cover_cache').upsert({
-      title_lower: title.toLowerCase(),
-      author_lower: author.toLowerCase(),
-      cover_url: newCoverUrl,
-      book_key: bookKey || title,
-      year: year || '',
-    }, { onConflict: 'title_lower,author_lower' });
-  }
-}
-
-async function adminFindCoverOptions(title, author) {
-  if (!state.isAdmin) return [];
-  const options = [];
-  const seen = new Set();
-
-  function addOption(url, source) {
-    if (!url || seen.has(url)) return;
-    seen.add(url);
-    options.push({ url, source });
-  }
-
-  // Fetch all sources in parallel
-  const [olResults, wikiCover, googleResults] = await Promise.allSettled([
-    // 1. Open Library — search for multiple editions to get different covers
-    (async () => {
-      const res = await fetch(`${OL}/search.json?title=${encodeURIComponent(title)}&author=${encodeURIComponent(author)}&limit=10&language=eng`);
-      if (!res.ok) return [];
-      const data = await res.json();
-      const covers = [];
-      for (const doc of (data.docs || [])) {
-        if (doc.cover_i) {
-          const sim = similarity(doc.title || '', title);
-          if (sim > 0.3 || normalizeText(doc.title || '').includes(normalizeText(title))) {
-            covers.push({
-              url: `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`,
-              source: `Open Library${doc.edition_count > 1 ? ` (${doc.first_publish_year || ''})` : ''}`,
-            });
-          }
-        }
-      }
-      return covers;
-    })(),
-    // 2. Wikipedia
-    getWikipediaCover(title, author),
-    // 3. Google Books — multiple results
-    (async () => {
-      const q = `intitle:"${title}" inauthor:"${author}"`;
-      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=8&printType=books&langRestrict=en`;
-      const res = await fetch(url);
-      if (!res.ok) return [];
-      const data = await res.json();
-      const covers = [];
-      for (const item of (data.items || [])) {
-        const info = item.volumeInfo || {};
-        const base = info.imageLinks?.large || info.imageLinks?.medium || info.imageLinks?.thumbnail || '';
-        if (base) {
-          const coverUrl = base.replace('http://', 'https://').replace('&edge=curl', '').replace(/zoom=\d+/g, 'zoom=3');
-          covers.push({ url: coverUrl, source: `Google Books (${info.publishedDate?.substring(0, 4) || '?'})` });
-        }
-      }
-      return covers;
-    })(),
-  ]);
-
-  // Collect results
-  if (olResults.status === 'fulfilled') {
-    for (const c of olResults.value) addOption(c.url, c.source);
-  }
-  if (wikiCover.status === 'fulfilled' && wikiCover.value) {
-    addOption(wikiCover.value, 'Wikipedia');
-  }
-  if (googleResults.status === 'fulfilled') {
-    for (const c of googleResults.value) addOption(c.url, c.source);
-  }
-
-  return options;
-}
-
-// ─── FRIENDS SYSTEM ──────────────────────────────────────────────────────
-async function searchUsers(query) {
-  if (!sb || !query.trim()) return [];
-  try {
-    const { data, error } = await sb.from('profiles').select('id, username, bio, avatar_url')
-      .ilike('username', `%${query}%`).limit(8);
-    if (error) {
-      // Fallback: avatar_url column might not exist yet
-      const { data: fallback, error: fallbackErr } = await sb.from('profiles').select('id, username, bio')
-        .ilike('username', `%${query}%`).limit(8);
-      if (fallbackErr) throw fallbackErr;
-      return (fallback || []).filter(u => u.id !== state.user?.id);
-    }
-    return (data || []).filter(u => u.id !== state.user?.id);
-  } catch (e) {
-    throw e;
-  }
-}
-
-async function getFriends() {
-  if (!sb || !state.user) return [];
-  try {
-    const { data, error } = await sb.from('friendships')
-      .select('friend_id')
-      .eq('user_id', state.user.id);
-    if (error) return [];
-    if (!data?.length) return [];
-    const friendIds = data.map(f => f.friend_id);
-    // Try with avatar_url first, fallback without
-    let profiles;
-    const { data: p1, error: e1 } = await sb.from('profiles')
-      .select('id, username, bio, avatar_url')
-      .in('id', friendIds);
-    if (e1) {
-      const { data: p2 } = await sb.from('profiles')
-        .select('id, username, bio')
-        .in('id', friendIds);
-      profiles = p2;
-    } else {
-      profiles = p1;
-    }
-    return (profiles || []);
-  } catch (e) { return []; }
-}
-
-async function addFriend(friendId) {
-  if (!sb || !state.user) return;
-  await sb.from('friendships').upsert({ user_id: state.user.id, friend_id: friendId }, { onConflict: 'user_id,friend_id' });
-}
-
-async function removeFriend(friendId) {
-  if (!sb || !state.user) return;
-  await sb.from('friendships').delete().eq('user_id', state.user.id).eq('friend_id', friendId);
-}
-
-async function getFriendActivity(friendId) {
-  if (!sb) return [];
-  try {
-    const { data } = await sb.from('reviews').select('book_key, book_title, rating, created_at')
-      .eq('user_id', friendId).order('created_at', { ascending: false }).limit(2);
-    return data || [];
-  } catch { return []; }
-}
-
-async function loadFriendsSidebar() {
-  if (!state.user) return;
-  const friendsList = document.getElementById('friends-list');
-  const friendsCount = document.getElementById('friends-count');
-  if (!friendsList) return;
-
-  const friends = await getFriends();
-  if (friendsCount) friendsCount.textContent = friends.length ? `(${friends.length})` : '';
-
-  if (!friends.length) {
-    friendsList.innerHTML = '<p style="color:var(--text-muted);font-size:13px;font-style:italic">No friends yet. Search above to add some!</p>';
-    return;
-  }
-
-  let html = '';
-  for (const friend of friends) {
-    const activity = await getFriendActivity(friend.id);
-    const friendAvatarHtml = friend.avatar_url
-      ? `<img class="friend-avatar friend-avatar-img" src="${escHtml(friend.avatar_url)}" alt="${escHtml(friend.username)}" onerror="this.outerHTML='<div class=\\'friend-avatar\\'>${(friend.username || '?')[0].toUpperCase()}</div>'">`
-      : `<div class="friend-avatar">${(friend.username || '?')[0].toUpperCase()}</div>`;
-    html += `
-      <div class="friend-item">
-        <div class="friend-info friend-info-link" data-user-id="${friend.id}" style="cursor:pointer" title="View ${escHtml(friend.username || 'User')}'s profile">
-          ${friendAvatarHtml}
-          <div>
-            <div class="friend-name">${escHtml(friend.username || 'User')}</div>
-            ${activity.length ? `<div class="friend-activity">${activity.map(a =>
-              `<span class="friend-activity-item">Reviewed "${escHtml(a.book_title)}" ${'★'.repeat(a.rating || 0)}</span>`
-            ).join('')}</div>` : '<div class="friend-activity"><span class="friend-activity-item">No recent activity</span></div>'}
-          </div>
-        </div>
-        <button class="friend-remove-btn" data-friend-id="${friend.id}" title="Remove friend">✕</button>
-      </div>`;
-  }
-  friendsList.innerHTML = html;
-
-  friendsList.querySelectorAll('.friend-info-link').forEach(el => {
-    el.addEventListener('click', () => navigate('user', { userId: el.dataset.userId }));
-  });
-
-  friendsList.querySelectorAll('.friend-remove-btn').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await removeFriend(btn.dataset.friendId);
-      showToast('Friend removed');
-      loadFriendsSidebar();
-    });
-  });
-}
-
-function bindFriendSearch() {
-  const input = document.getElementById('friend-search-input');
-  const resultsEl = document.getElementById('friend-search-results');
-  if (!input || !resultsEl) return;
-
-  // Remove old listeners by replacing element
-  const newInput = input.cloneNode(true);
-  input.parentNode.replaceChild(newInput, input);
-
-  let debounce;
-  async function doFriendSearch(q) {
-    if (!q) { resultsEl.innerHTML = ''; resultsEl.style.display = 'none'; return; }
-    resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">Searching…</div>';
-    resultsEl.style.display = 'block';
-    let users;
-    try {
-      users = await searchUsers(q);
-    } catch (e) {
-      resultsEl.innerHTML = `<div class="friend-search-item" style="color:var(--accent-red)">Search failed: ${escHtml(e?.message || 'Check Supabase RLS policies on the profiles table')}</div>`;
-      resultsEl.style.display = 'block';
-      return;
-    }
-    const friends = await getFriends();
-    const friendIds = new Set(friends.map(f => f.id));
-    if (!users.length) { resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">No users found</div>'; resultsEl.style.display = 'block'; return; }
-    resultsEl.innerHTML = users.map(u => {
-      const sAvatarHtml = u.avatar_url
-        ? `<img class="friend-avatar friend-avatar-img" src="${escHtml(u.avatar_url)}" style="width:28px;height:28px" alt="" onerror="this.outerHTML='<div class=\\'friend-avatar\\' style=\\'width:28px;height:28px;font-size:12px\\'>${(u.username || '?')[0].toUpperCase()}</div>'">`
-        : `<div class="friend-avatar" style="width:28px;height:28px;font-size:12px">${(u.username || '?')[0].toUpperCase()}</div>`;
-      return `
-      <div class="friend-search-item" data-user-id="${u.id}">
-        ${sAvatarHtml}
-        <span>${escHtml(u.username)}</span>
-        ${friendIds.has(u.id) ? '<span style="color:var(--accent-green);font-size:12px">✓ Friends</span>' : `<button class="btn btn-primary btn-sm add-friend-btn" data-user-id="${u.id}" style="margin-left:auto;padding:2px 10px;font-size:11px">Add</button>`}
-      </div>
-    `}).join('');
-    resultsEl.style.display = 'block';
-    resultsEl.querySelectorAll('.add-friend-btn').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        await addFriend(btn.dataset.userId);
-        showToast('Friend added!');
-        newInput.value = '';
-        resultsEl.innerHTML = '';
-        resultsEl.style.display = 'none';
-        loadFriendsSidebar();
-      });
-    });
-  }
-
-  // Search as you type (debounced)
-  newInput.addEventListener('input', () => {
-    clearTimeout(debounce);
-    const q = newInput.value.trim();
-    if (!q) { resultsEl.innerHTML = ''; resultsEl.style.display = 'none'; return; }
-    debounce = setTimeout(() => doFriendSearch(q), 300);
-  });
-
-  // Also search immediately on Enter
-  newInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      clearTimeout(debounce);
-      const q = newInput.value.trim();
-      doFriendSearch(q);
-    }
-  });
-}
-
-// ─── REVIEWS SYSTEM ─────────────────────────────────────────────────────
-async function getBookReviews(bookKey) {
-  if (!sb) return [];
-  try {
-    // Fetch reviews first
-    const { data: reviews, error } = await sb.from('reviews')
-      .select('id, user_id, book_key, book_title, rating, review_text, created_at')
-      .eq('book_key', bookKey)
-      .order('created_at', { ascending: false })
-      .limit(20);
-    if (error) return [];
-    if (!reviews?.length) return [];
-    // Fetch usernames separately to avoid FK naming issues
-    const userIds = [...new Set(reviews.map(r => r.user_id))];
-    let profiles;
-    const { data: p1, error: e1 } = await sb.from('profiles')
-      .select('id, username, avatar_url')
-      .in('id', userIds);
-    if (e1) {
-      const { data: p2 } = await sb.from('profiles')
-        .select('id, username')
-        .in('id', userIds);
-      profiles = p2;
-    } else {
-      profiles = p1;
-    }
-    const profileMap = {};
-    (profiles || []).forEach(p => { profileMap[p.id] = p; });
-    return reviews.map(r => ({
-      ...r,
-      username: profileMap[r.user_id]?.username || 'Anonymous',
-      avatar_url: profileMap[r.user_id]?.avatar_url || null,
-    }));
-  } catch (e) { return []; }
-}
-
-async function submitReview(bookKey, bookTitle, rating, reviewText) {
-  if (!sb || !state.user) throw new Error('Must be logged in');
-  const { error } = await sb.from('reviews').upsert({
-    user_id: state.user.id,
-    book_key: bookKey,
-    book_title: bookTitle,
-    rating: rating || null,
-    review_text: reviewText,
-  }, { onConflict: 'user_id,book_key' });
-  if (error) throw error;
-}
-
-async function deleteReview(reviewId) {
-  if (!sb) return;
-  await sb.from('reviews').delete().eq('id', reviewId);
-}
-
 // ─── ROUTER ──────────────────────────────────────────────────────────────
-// Blind Date is deliberately client-first: it works anonymously and only uses
-// the optional votes table when a signed-in account is available.
-const BLIND_DATE_STORAGE = 'lbx_blind_date_session_v1';
-const BLIND_DATE_SUBJECTS = ['literary_fiction','science_fiction','mystery','history','biography','fantasy','psychology','travel','horror','poetry'];
-const blindDateCoverPreloads = new Map();
-const blindDateWorkPreloads = new Map();
-
-function preloadBlindDateCover(book) {
-  if (!book?.coverUrl) return Promise.resolve(false);
-  if (blindDateCoverPreloads.has(book.key)) return blindDateCoverPreloads.get(book.key);
-  const promise = new Promise(resolve => {
-    const image = new Image();
-    image.onload = () => resolve(true);
-    image.onerror = () => resolve(false);
-    image.src = coverUrl(book.coverUrl, 'L');
-  });
-  blindDateCoverPreloads.set(book.key, promise);
-  return promise;
-}
-
-async function enrichBlindDateBook(book) {
-  const workId = String(book?.key || '').replace('/works/', '');
-  if (!/^OL\d+W$/.test(workId)) return book;
-  if (!blindDateWorkPreloads.has(workId)) {
-    blindDateWorkPreloads.set(workId, (async () => {
-      try {
-        const response = await fetch(`${OL}/works/${workId}.json`);
-        if (!response.ok) return null;
-        const data = await response.json();
-        const description = typeof data.description === 'string' ? data.description : data.description?.value || '';
-        return { description, subjects: Array.isArray(data.subjects) ? data.subjects : [] };
-      } catch { return null; }
-    })());
-  }
-  const details = await blindDateWorkPreloads.get(workId);
-  if (!details) return book;
-  if (details.description) book.description = details.description;
-  if (details.subjects.length) book.categories = [...new Set([...(book.categories || []), ...details.subjects])].slice(0, 12);
-  return book;
-}
-
-function newBlindDateSession() {
-  return { id: crypto.randomUUID?.() || `bd-${Date.now()}`, shown: [], votes: [], pool: [], current: null, revealed: false, busy: false, summaryDue: false };
-}
-
-function loadBlindDateSession() {
-  if (state.blindDate) return state.blindDate;
-  try {
-    const saved = JSON.parse(sessionStorage.getItem(BLIND_DATE_STORAGE) || 'null');
-    state.blindDate = saved?.id ? { ...newBlindDateSession(), ...saved, pool: [] } : newBlindDateSession();
-  } catch { state.blindDate = newBlindDateSession(); }
-  return state.blindDate;
-}
-
-function saveBlindDateSession() {
-  const game = loadBlindDateSession();
-  sessionStorage.setItem(BLIND_DATE_STORAGE, JSON.stringify({ ...game, pool: [], busy: false }));
-}
-
-function blindDateCopyIndex(book, length) {
-  const seed = String(book?.key || book?.year || 'book');
-  return [...seed].reduce((total, char) => total + char.charCodeAt(0), 0) % length;
-}
-
-function blindDateSafeCategories(book) {
-  const titleWords = new Set(normalizeText(book?.title || '').split(' ').filter(word => word.length > 3));
-  const seen = new Set();
-  return (book?.categories || [])
-    .map(category => String(category).replace(/_/g, ' ').replace(/^(?:subject|genre)\s*:\s*/i, '').trim())
-    .filter(Boolean)
-    .filter(category => !/^(?:serie|series|franchise|characters?|places?|people|persons?)\s*:/i.test(category))
-    .filter(category => !/juvenile literature|protected daisy|accessible book|reading level|open library|nyt bestseller/i.test(category))
-    .filter(category => {
-      const words = normalizeText(category).split(' ').filter(word => word.length > 3);
-      return !words.length || words.filter(word => titleWords.has(word)).length / words.length < .6;
-    })
-    .filter(category => {
-      const key = normalizeText(category);
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-}
-
-function blindDateNeutralPremise(book) {
-  const subjects = blindDateSafeCategories(book)
-    .flatMap(category => category.split(/[\/;,]/))
-    .map(subject => subject.trim().toLowerCase())
-    .filter(subject => subject.length > 2 && subject.length < 38)
-    .filter(subject => !/fiction|literature|accessible book|protected daisy|reading level|open library|nyt|bestseller/.test(subject));
-  const allMetadata = `${(book.categories || []).join(' ')} ${book.title || ''}`.toLowerCase();
-  const themeLabels = subjects.slice(0, 2);
-  const themes = themeLabels.length === 2
-    ? `${themeLabels[0]} and ${themeLabels[1]}`
-    : themeLabels[0] || 'the choices people make under pressure';
-  const pace = book.pages ? (book.pages < 240 ? 'compact' : book.pages > 520 ? 'expansive' : 'full-length') : 'immersive';
-
-  let voice = 'literary';
-  if (/mystery|detective|crime|thriller|suspense/.test(allMetadata)) voice = 'mystery';
-  else if (/science fiction|space|dystopi|future|alien/.test(allMetadata)) voice = 'speculative';
-  else if (/fantasy|magic|myth|fairy|dragon/.test(allMetadata)) voice = 'fantasy';
-  else if (/horror|ghost|supernatural|gothic/.test(allMetadata)) voice = 'horror';
-  else if (/biograph|memoir|autobiograph/.test(allMetadata)) voice = 'memoir';
-  else if (/history|politic|war|social science/.test(allMetadata)) voice = 'history';
-  else if (/romance|love stories/.test(allMetadata)) voice = 'romance';
-
-  const openings = {
-    mystery: ['Something is wrong, and the truth is buried under several convincing lies.', 'A question nobody can quite answer begins to pull everything else apart.', 'The clues are there. The trouble is deciding whom to trust.'],
-    speculative: ['The world is recognizable, until one altered rule changes what it means to be human.', 'Imagine ordinary people living with an extraordinary new reality.', 'The future arrives carrying a problem nobody is ready to solve.'],
-    fantasy: ['Beyond the familiar world, an old power is beginning to stir.', 'A strange world opens slowly, then asks for more than its characters expected to give.', 'Magic may shape this world, but its hardest choices are painfully human.'],
-    horror: ['The unease begins quietly, in a place that should have felt safe.', 'Something waits just outside the edge of an ordinary life.', 'The first warning is easy to dismiss. The next one is not.'],
-    memoir: ['A life is revisited through the moments that changed its direction.', 'This is less a record of events than an attempt to understand what they meant.', 'Memory, identity, and consequence meet in one candid life story.'],
-    history: ['A familiar chapter of history looks very different from inside the lives it changed.', 'Large events come into focus through the people caught in their path.', 'The past becomes immediate when viewed through its arguments, accidents, and human costs.'],
-    romance: ['Two lives begin to overlap at exactly the wrong, or perhaps right, moment.', 'Attraction is the easy part. Everything surrounding it is more complicated.', 'A connection grows where good sense says it probably should not.'],
-    literary: ['An ordinary life shifts, and the consequences refuse to stay ordinary.', 'A small decision opens into a much larger reckoning.', 'People try to understand one another, with mixed and revealing results.'],
-  };
-  const middles = [
-    `Underneath it runs an interest in ${themes}.`,
-    `Its real territory is ${themes}.`,
-    `What unfolds keeps circling back to ${themes}.`,
-    `The story uses its premise to look closely at ${themes}.`,
-  ];
-  const endings = [
-    `It unfolds at a ${pace} pace, leaving plenty for the reader to discover firsthand.`,
-    `The shape is ${pace}; the pleasure lies in seeing where its central idea leads.`,
-    `Much of the appeal comes from watching its separate pieces gather meaning.`,
-    `Go in curious. This one is better met without a map.`,
-  ];
-  const index = blindDateCopyIndex(book, openings[voice].length);
-  return `${openings[voice][index]} ${middles[blindDateCopyIndex({ key: `${book.key}m` }, middles.length)]} ${endings[blindDateCopyIndex({ key: `${book.key}e` }, endings.length)]}`;
-}
-
-function cleanBookDescription(book) {
-  const holder = document.createElement('div');
-  holder.innerHTML = book.description || '';
-  let text = (holder.textContent || '').replace(/\s+/g, ' ').trim();
-  const secrets = [book.title, book.author, ...(book.author || '').split(/\s+/).filter(p => p.length > 3)];
-  secrets.filter(Boolean).sort((a,b) => b.length - a.length).forEach(secret => {
-    text = text.replace(new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), 'this book');
-  });
-  text = text
-    .replace(/(?:in|from)\s+[A-Z][\w'’.-]+(?:\s+[A-Z][\w'’.-]+){0,4}(?:'s|’s)?\s+(?:masterpiece|novel|book|series|classic)/g, 'In this story')
-    .replace(/\b(?:New York Times|Sunday Times|international)\s+bestsell(?:er|ing)\b/gi, '')
-    .replace(/\b(?:bestselling|award-winning|acclaimed|celebrated) author\b/gi, 'writer')
-    .replace(/\b(?:Book|Volume)\s+(?:One|Two|Three|Four|Five|\d+)\s+(?:of|in)\s+(?:the\s+)?[^.!?]+/gi, 'Part of a larger story')
-    // Multi-word proper names are usually characters, places, or series names.
-    // Mask them before reveal rather than leaking them through the synopsis.
-    .replace(/\b[A-Z][a-z'’.-]{2,}(?:\s+[A-Z][a-z'’.-]{2,})+(?:'s|’s)?\b/g, 'someone')
-    .replace(/\s+([,.;!?])/g, '$1')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
-  if (!text || text.length < 80 || /this book.{0,12}this book/i.test(text)) {
-    return blindDateNeutralPremise(book);
-  }
-  const clipped = text.slice(0, 430);
-  return clipped.length < text.length ? `${clipped.replace(/\s+\S*$/, '')}…` : clipped;
-}
-
-function blindDateEligible(book) {
-  if (!book?.key || !book.title || !book.author || !book.year) return false;
-  const descriptionLength = book.description?.trim().length || 0;
-  const usefulGenres = (book.categories || []).filter(Boolean).length;
-  // Covers are preferred during ranking, but the reveal UI already has a
-  // graceful missing-cover state. A concise premise or two useful subjects is
-  // enough to build an anonymous card without throwing away most candidates.
-  return descriptionLength >= 40 || usefulGenres >= 2;
-}
-
-function blindDatePreferredYear() {
-  const wishlistYears = Object.values(state.wishlist).map(item => Number(item.year)).filter(year => year > 0).sort((a,b) => a - b);
-  return wishlistYears.length ? wishlistYears[Math.floor(wishlistYears.length / 2)] : 2005;
-}
-
-async function fillBlindDatePool() {
-  const game = loadBlindDateSession();
-  if (game.pool.length >= 12 || game.loading) return;
-  game.loading = true;
-  const excluded = new Set([...game.shown, ...Object.keys(state.readBooks)]);
-  const works = new Set(game.pool.map(b => normalizeText(`${stripSubtitle(b.title)}|${b.author}`)));
-  const addBooks = books => {
-    for (const book of books) {
-      const work = normalizeText(`${stripSubtitle(book.title)}|${book.author}`);
-      if (!blindDateEligible(book) || excluded.has(book.key) || works.has(work)) continue;
-      works.add(work); game.pool.push(book);
-    }
-  };
-
-  // Open Library is the primary game catalogue. Its subject search is free,
-  // does not require a browser-exposed API key, and returns canonical works.
-  const subjects = [...BLIND_DATE_SUBJECTS].sort(() => Math.random() - .5).slice(0, 6);
-  const modernStartYear = Math.max(1950, blindDatePreferredYear() - 30);
-  const olBatches = await Promise.allSettled(subjects.map((subject, i) => {
-    // Four modern-release lanes for every two broad catalogue lanes. This
-    // avoids Open Library's edition-count bias toward nineteenth-century books.
-    const modernLane = i < 4;
-    const sort = 'editions';
-    const offset = modernLane ? ((game.votes.length + i * 7) % 3) * 24 : ((game.votes.length + i * 11) % 5) * 24;
-    return fetchOLSubject(subject, 24, offset, sort, modernLane ? modernStartYear : null);
-  }));
-  addBooks(olBatches.flatMap(result => result.value || []));
-
-  // Google Books is now a small last-resort fallback instead of the primary
-  // source, so a Google rate limit cannot empty a healthy Open Library pool.
-  if (game.pool.length < 8) {
-    const fallback = await Promise.allSettled(subjects.slice(0, 2).map((subject, i) =>
-      searchBooksGoogle(`subject:${subject.replace(/_/g, ' ')}`, 10, i * 10)
-    ));
-    addBooks(fallback.flatMap(result => result.value || []));
-  }
-  game.loading = false;
-}
-
-function blindDateAffinity(book) {
-  let score = Math.random() * 2;
-  if (book.coverUrl) score += .45;
-  if ((book.description || '').length >= 120) score += .35;
-  if ((book.categories || []).length >= 2) score += .25;
-  const preferredYear = blindDatePreferredYear();
-  const candidateYear = Number(book.year) || 0;
-  if (candidateYear) {
-    const distance = Math.abs(candidateYear - preferredYear);
-    if (distance <= 10) score += 3;
-    else if (distance <= 25) score += 1.5;
-    else if (candidateYear < 1900 && preferredYear >= 1950) score -= 2.5;
-  }
-  for (const vote of loadBlindDateSession().votes) {
-    const direction = vote.choice === 'interested' ? 1 : -.35;
-    if ((book.categories || []).some(c => vote.categories?.some(v => normalizeText(v).includes(normalizeText(c)) || normalizeText(c).includes(normalizeText(v))))) score += 3 * direction;
-    if (book.pages && vote.pages && Math.abs(book.pages - vote.pages) < 150) score += .8 * direction;
-    if (book.year && vote.year && Math.abs(Number(book.year) - Number(vote.year)) < 15) score += .6 * direction;
-  }
-  return score;
-}
-
-async function chooseBlindDateBook() {
-  const game = loadBlindDateSession();
-  await fillBlindDatePool();
-  if (!game.pool.length) return null;
-  const exploratory = Math.random() < .3;
-  // Most exploratory picks still come from the modern catalogue. Roughly one
-  // in four may range freely across eras so classics remain discoverable.
-  const freeEraExploration = exploratory && Math.random() < .25;
-  const ranked = [...game.pool].sort((a,b) => freeEraExploration ? Math.random() - .5 : blindDateAffinity(b) - blindDateAffinity(a));
-  const book = ranked[0];
-  game.pool = game.pool.filter(b => b.key !== book.key);
-  await enrichBlindDateBook(book);
-  game.current = book; game.revealed = false; game.shown.push(book.key);
-  preloadBlindDateCover(book);
-  game.pool.slice(0, 3).forEach(preloadBlindDateCover);
-  saveBlindDateSession(); fillBlindDatePool();
-  return book;
-}
-
-function updateBlindDateProgress() {
-  const step = loadBlindDateSession().votes.length % 10 + 1;
-  const label = document.getElementById('blind-date-progress-label');
-  const fill = document.getElementById('blind-date-progress-fill');
-  if (label) label.textContent = `${step} / 10`;
-  if (fill) fill.style.width = `${step * 10}%`;
-}
-
-function renderBlindDateMystery(book) {
-  const stage = document.getElementById('blind-date-stage');
-  if (!stage) return;
-  preloadBlindDateCover(book);
-  const safeCategories = blindDateSafeCategories(book);
-  const nonfiction = safeCategories.some(c => /history|biography|science|psychology|business|travel/i.test(c));
-  const prompts = ['Worth turning the first page?', 'Does this belong in your reading future?', 'Would you take this one home?', 'Has this earned a place on your nightstand?', 'Would you keep reading after page one?'];
-  const prompt = prompts[blindDateCopyIndex(book, prompts.length)];
-  stage.innerHTML = `<article class="blind-card blind-card-mystery"><div class="blind-card-rail"><span>YOUR NEXT BLIND DATE</span><b aria-hidden="true">?</b></div><div class="blind-card-body"><div class="blind-clue-meta"><span>${nonfiction ? 'Nonfiction or literary narrative' : 'Fiction'}</span><span>First published ${escHtml(book.year)}</span>${book.pages ? `<span>${book.pages} pages</span>` : ''}</div><div class="blind-genres">${safeCategories.slice(0,4).map(c => `<span>${escHtml(c)}</span>`).join('')}</div><blockquote>${escHtml(cleanBookDescription(book))}</blockquote><p class="blind-prompt">${prompt}</p><div class="blind-actions"><button class="blind-choice blind-choice-no" data-choice="not_interested" type="button"><span>×</span> Not for me</button><button class="blind-choice blind-choice-yes" data-choice="interested" type="button"><span>+</span> Interested</button></div></div></article>`;
-  stage.querySelectorAll('[data-choice]').forEach(button => button.addEventListener('click', () => voteBlindDate(button.dataset.choice)));
-  updateBlindDateProgress();
-}
-
-async function voteBlindDate(choice) {
-  const game = loadBlindDateSession();
-  if (game.busy || game.revealed || !game.current) return;
-  game.busy = true;
-  document.querySelectorAll('.blind-choice').forEach(button => { button.disabled = true; });
-  document.querySelector('.blind-card-mystery')?.classList.add('is-choosing');
-  const book = game.current;
-  const vote = { book_id: book.key, choice, timestamp: new Date().toISOString(), session_id: game.id, categories: book.categories || [], pages: book.pages || null, year: book.year || null };
-  game.votes.push(vote); game.revealed = true; game.summaryDue = game.votes.length % 10 === 0;
-  saveBlindDateSession();
-  if (state.user && sb) sb.from('blind_date_votes').insert({ user_id: state.user.id, book_id: book.key, choice, created_at: vote.timestamp, session_id: game.id }).then(() => {});
-  await Promise.race([
-    preloadBlindDateCover(book),
-    new Promise(resolve => setTimeout(resolve, 700)),
-  ]);
-  renderBlindDateReveal(book, choice); game.busy = false;
-}
-
-function renderBlindDateReveal(book, choice) {
-  const interested = choice === 'interested';
-  const isWish = !!state.wishlist[book.key];
-  const likedVerdicts = ['A spark worth following', 'This one found its reader', 'Your shelf just leaned closer', 'Curiosity wins this round'];
-  const passedVerdicts = ['Not every book finds its reader', 'A clean break—unless…', 'The mystery worked; the match did not', 'One for a different shelf'];
-  const verdicts = interested ? likedVerdicts : passedVerdicts;
-  const verdict = verdicts[blindDateCopyIndex(book, verdicts.length)];
-  const saveLabel = interested ? '+ Add to Read Later' : 'Still want to read';
-  document.getElementById('blind-date-stage').innerHTML = `<article class="blind-card blind-card-reveal"><div class="blind-reveal-cover"><img src="${escHtml(coverUrl(book.coverUrl,'L'))}" alt="Cover of ${escHtml(book.title)}" onerror="this.parentElement.classList.add('cover-failed');this.remove()"><span>Cover unavailable</span></div><div class="blind-reveal-copy"><p class="blind-verdict ${interested ? 'liked' : ''}">${verdict}</p><h2>${escHtml(book.title)}</h2><p class="blind-author">${escHtml(book.author)} · ${escHtml(book.year)}</p><div class="blind-genres">${book.categories.slice(0,3).map(c => `<span>${escHtml(c)}</span>`).join('')}</div><p class="blind-reveal-description">${escHtml(cleanBookDescription(book))}</p><div class="blind-reveal-actions"><button class="blind-save ${isWish ? 'saved' : ''}" id="blind-save" type="button">${isWish ? '✓ Saved to Read Later' : saveLabel}</button><button class="blind-detail" id="blind-detail" type="button">View book details ↗</button><button class="blind-next" id="blind-next" type="button">${loadBlindDateSession().summaryDue ? 'See your results →' : 'Next blind date →'}</button></div></div></article>`;
-  document.getElementById('blind-save')?.addEventListener('click', async e => { await toggleWishlist(book); e.currentTarget.textContent = state.wishlist[book.key] ? '✓ Saved to Read Later' : saveLabel; e.currentTarget.classList.toggle('saved', !!state.wishlist[book.key]); });
-  document.getElementById('blind-detail')?.addEventListener('click', () => openBook(book));
-  document.getElementById('blind-next')?.addEventListener('click', nextBlindDate);
-}
-
-function blindDateSummary() {
-  const game = loadBlindDateSession(), last = game.votes.slice(-10), liked = last.filter(v => v.choice === 'interested'), genres = {};
-  liked.forEach(v => v.categories.forEach(c => { const g = c.split('/')[0].trim(); genres[g] = (genres[g] || 0) + 1; }));
-  const top = Object.entries(genres).sort((a,b) => b[1] - a[1]).slice(0,3).map(([g]) => g);
-  const withPages = liked.filter(v => v.pages), avgPages = Math.round(withPages.reduce((n,v) => n + v.pages, 0) / Math.max(1, withPages.length));
-  const signals = [...top.map(g => `More ${g.toLowerCase()}`), ...(avgPages ? [`Books around ${Math.round(avgPages/50)*50} pages`] : []), 'A little room for surprises'].slice(0,4);
-  document.getElementById('blind-date-stage').innerHTML = `<section class="blind-summary"><p>10 books, zero covers</p><h2>Your Blind Date results</h2><div class="blind-summary-score"><strong>${liked.length}</strong><span>of 10<br>caught your interest</span></div><p>So far, your shelf is leaning toward:</p><ul>${signals.map(s => `<li>${escHtml(s)}</li>`).join('')}</ul><button class="blind-next" id="blind-continue" type="button">Continue dating books →</button></section>`;
-  document.getElementById('blind-continue').addEventListener('click', async () => { game.summaryDue = false; saveBlindDateSession(); await nextBlindDate(); });
-}
-
-async function nextBlindDate() {
-  const game = loadBlindDateSession();
-  if (game.summaryDue) return blindDateSummary();
-  renderBlindDateLoading(); const book = await chooseBlindDateBook();
-  if (book) renderBlindDateMystery(book); else renderBlindDateEmpty();
-}
-function renderBlindDateLoading() {
-  const lines = ['Pulling a promising book from the stacks…', 'Following a loose page through the catalogue…', 'Asking the shelves to keep a secret…', 'Finding a story you might otherwise miss…'];
-  const line = lines[Math.floor(Math.random() * lines.length)];
-  const el = document.getElementById('blind-date-stage');
-  if (el) el.innerHTML = `<div class="blind-loading" role="status"><svg class="blind-loading-books" width="82" height="72" viewBox="0 0 82 72" fill="none" aria-hidden="true"><rect class="book-one" x="8" y="48" width="66" height="13" rx="1"/><rect class="book-two" x="15" y="30" width="58" height="13" rx="1"/><rect class="book-three" x="9" y="12" width="64" height="13" rx="1"/><path d="M18 16h32M24 34h40M18 52h35"/></svg><p>${line}</p></div>`;
-}
-function renderBlindDateEmpty() { const el = document.getElementById('blind-date-stage'); if (el) el.innerHTML = `<div class="blind-empty"><span>THE STACKS ARE QUIET</span><h2>No suitable books found.</h2><p>We could not reach the catalogue, or you have seen every eligible book in this batch.</p><button class="blind-next" type="button" onclick="nextBlindDate()">Try the stacks again →</button></div>`; }
-async function loadBlindDatePage() {
-  const game = loadBlindDateSession();
-  if (game.summaryDue) return blindDateSummary();
-  if (game.current && game.revealed) return renderBlindDateReveal(game.current, game.votes.at(-1)?.choice);
-  if (game.current) { await enrichBlindDateBook(game.current); return renderBlindDateMystery(game.current); }
-  renderBlindDateLoading(); const book = await chooseBlindDateBook();
-  if (book) renderBlindDateMystery(book); else renderBlindDateEmpty();
-}
-
 function navigate(page, params = {}) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
@@ -2263,9 +438,9 @@ function navigate(page, params = {}) {
   } else if (page === 'profile') {
     loadProfilePage();
   } else if (page === 'collection') {
-    // content rendered by loadCollectionPage before navigate is called
+    // loadCollectionPage renders content after this navigation
   } else if (page === 'user') {
-    loadUserProfile(params.userId);
+    loadUserProfile(params.userId).catch(error => showToast(error.message || "Could not load this profile.", "error"));
   } else if (page === 'wishlist') {
     loadWishlistPage();
   } else if (page === 'lists') {
@@ -2360,14 +535,14 @@ async function loadHomePage() {
     renderShelfBooks('popular-books-grid', popular);
     renderShelfBooks('classics-books-grid', classics);
     renderShelfBooks('fiction-books-grid', fiction);
-    updateHeroFan();
+    renderHeroFeature();
     homeLoaded = true;
   } catch (e) {
     showToast('Could not load books. Check your connection.', 'error');
   }
 }
 
-function updateHeroFan() {
+function renderHeroFeature() {
   const books = state.popularBooks;
   if (!books || !books.length) return;
   const feature = document.getElementById('hero-feature');
@@ -2516,7 +691,7 @@ function renderContinueReading() {
   grid.innerHTML = all.join('');
 
   grid.querySelectorAll('.continue-book-slot:not(.continue-book-add)').forEach(slot => {
-    slot.addEventListener('click', () => {
+    slot.addEventListener('click', async () => {
       const b = state.readBooks[slot.dataset.key];
       if (b) openBook(b);
     });
@@ -2530,11 +705,11 @@ async function renderYourListsHP() {
   const container = document.getElementById('your-lists-list');
   if (!container || !state.user || !sb) return;
   try {
-    const { data } = await sb.from('lists')
+    const { data } = await queryResult(sb.from('lists')
       .select('id, title, list_books(count)')
       .eq('user_id', state.user.id)
       .order('created_at', { ascending: false })
-      .limit(5);
+      .limit(5));
     if (!data?.length) {
       container.innerHTML = `<div style="color:var(--text-muted);font-size:13px;padding:4px 0">No lists yet. <button class="link-btn" id="hp-create-list-link">Create one →</button></div>`;
       document.getElementById('hp-create-list-link')?.addEventListener('click', () => navigate('lists'));
@@ -2633,23 +808,23 @@ function renderShelfBooks(containerId, books) {
   el.innerHTML = books.map(book => shelfBookHTML(book)).join('');
   // bind events
   el.querySelectorAll('.book-card').forEach(card => {
-    card.addEventListener('click', (e) => {
+    card.addEventListener('click', async (e) => {
       if (e.target.closest('.overlay-btn')) return;
       const book = findBookByKey(card.dataset.key) || books.find(b => b.key === card.dataset.key);
       if (book) openBook(book);
     });
   });
   el.querySelectorAll('.overlay-btn.mark-read').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      toggleRead(btn.dataset.key, btn.dataset.title, btn.dataset.author, btn.dataset.cover, btn.dataset.year);
+      await toggleRead(btn.dataset.key, btn.dataset.title, btn.dataset.author, btn.dataset.cover, btn.dataset.year);
       // update badge
       const card = el.querySelector(`.book-card[data-key="${CSS.escape(btn.dataset.key)}"]`);
       if (card) refreshCardBadge(card, btn.dataset.key);
     });
   });
   el.querySelectorAll('.overlay-btn.rate-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const book = books.find(b => b.key === btn.dataset.key);
       if (book) openRatingModal(book);
@@ -2717,7 +892,7 @@ function refreshCardBadge(card, key) {
 // ─── SHELF ARROWS ─────────────────────────────────────────────────────────
 function initShelfArrows() {
   document.querySelectorAll('.shelf-arrow-right').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       const targetId = btn.dataset.target;
       const track = document.getElementById(targetId)?.querySelector('.shelf-track');
       if (!track) return;
@@ -2752,10 +927,10 @@ async function loadListsPreviews() {
   const curated = allLists.filter(l => l.is_curated);
   const userLists = allLists.filter(l => !l.is_curated);
 
-  // Popular lists = user lists sorted by book count (proxy for popularity) + curated
+  // Popular lists = user lists sorted by book count (proxy for popularity)
   const popular = [...userLists].sort((a, b) => (b.books?.length || 0) - (a.books?.length || 0)).slice(0, 6);
   if (popular.length) {
-    popularContainer.innerHTML = popular.map(l => listCardHTML(l, 'user')).join('');
+    popularContainer.innerHTML = popular.map(l => listCardHTML(l)).join('');
   } else {
     popularContainer.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">No lists yet. Create the first one!</div>';
   }
@@ -2764,7 +939,7 @@ async function loadListsPreviews() {
   const recent = [...userLists].sort((a, b) => (b.id > a.id ? 1 : -1)).slice(0, 6);
   if (recent.length && newSection && newContainer) {
     newSection.style.display = '';
-    newContainer.innerHTML = recent.map(l => listCardHTML(l, 'user')).join('');
+    newContainer.innerHTML = recent.map(l => listCardHTML(l)).join('');
   }
 
   // Letterbooxd Recommendations = curated lists
@@ -2773,7 +948,7 @@ async function loadListsPreviews() {
       const list = CURATED_LISTS_OFFLINE[id];
       return list ? { id, title: list.title, source: list.source, year: list.year, desc: list.desc, is_curated: true, books: list.books } : null;
     }).filter(Boolean);
-    recsContainer.innerHTML = recsData.map(l => listCardHTML(l, 'curated')).join('');
+    recsContainer.innerHTML = recsData.map(l => listCardHTML(l)).join('');
   }
 
   // Bind click events on all containers
@@ -2786,7 +961,7 @@ async function loadListsPreviews() {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         if (!confirm('Delete this list?')) return;
-        await deleteUserList(btn.dataset.listId);
+        if (!await deleteUserList(btn.dataset.listId)) return;
         showToast('List deleted');
         listsPageLoaded = false;
         loadListsPreviews();
@@ -2798,7 +973,7 @@ async function loadListsPreviews() {
   listsPageLoaded = true;
 }
 
-function listCardHTML(list, type) {
+function listCardHTML(list) {
   const bookCount = list.books?.length ?? '…';
   const isOwn = state.user && list.user_id === state.user.id;
   const previewCount = Array.isArray(list.books) ? Math.min(list.books.length, 5) : 5;
@@ -2822,6 +997,33 @@ function listCardHTML(list, type) {
     </div>`;
 }
 
+async function renderListPreviewCovers(previewEl, books, showMissing = false) {
+  const first5 = books.slice(0, 5);
+  const results = await Promise.allSettled(
+    first5.map(b => {
+      if (b.coverUrl) return Promise.resolve({ coverUrl: b.coverUrl, title: b.title });
+      return searchBooksForList(b.title, b.author);
+    })
+  );
+
+  const slots = previewEl.querySelectorAll('.list-placeholder-cover');
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled' && r.value && r.value.coverUrl) {
+      const img = document.createElement('img');
+      img.src = coverUrl(r.value.coverUrl, 'S');
+      img.alt = first5[i].title;
+      img.style.flex = '1';
+      img.style.objectFit = 'cover';
+      img.style.borderRight = '2px solid var(--bg-primary)';
+      slots[i]?.replaceWith(img);
+    } else if (showMissing && slots[i]) {
+      slots[i].classList.add('is-missing');
+      slots[i].textContent = first5[i].title;
+      slots[i].title = first5[i].title;
+    }
+  });
+}
+
 async function loadListPreviewCovers() {
   const allLists = Object.values(listsCache).length ? Object.values(listsCache) : CURATED_LIST_IDS.map(id => ({id, ...(CURATED_LISTS_OFFLINE[id] || {})}));
 
@@ -2837,35 +1039,11 @@ async function loadListPreviewCovers() {
     }
     if (!books?.length) continue;
 
-    const first5 = books.slice(0, 5);
-    const results = await Promise.allSettled(
-      first5.map(b => {
-        if (b.coverUrl) return Promise.resolve({ coverUrl: b.coverUrl, title: b.title });
-        return searchBooksForList(b.title, b.author);
-      })
-    );
-
-    const slots = previewEl.querySelectorAll('.list-placeholder-cover');
-    results.forEach((r, i) => {
-      if (r.status === 'fulfilled' && r.value && r.value.coverUrl) {
-        const img = document.createElement('img');
-        img.src = coverUrl(r.value.coverUrl, 'S');
-        img.alt = first5[i].title;
-        img.style.flex = '1';
-        img.style.objectFit = 'cover';
-        img.style.borderRight = '2px solid var(--bg-primary)';
-        slots[i]?.replaceWith(img);
-      } else if (slots[i]) {
-        slots[i].classList.add('is-missing');
-        slots[i].textContent = first5[i].title;
-        slots[i].title = first5[i].title;
-      }
-    });
+    await renderListPreviewCovers(previewEl, books, true);
   }
 }
 
 function openList(listId) {
-  state.currentList = listId;
   navigate('list-detail', { listId });
 }
 
@@ -2874,7 +1052,7 @@ async function loadListDetail(listId) {
   
   // If books not loaded yet, fetch them
   if (!list || !list.books?.length) {
-    const books = await loadListBooks(listId);
+    await loadListBooks(listId);
     list = getListData(listId);
     if (!list) {
       // Try offline fallback
@@ -2925,25 +1103,15 @@ async function loadListDetail(listId) {
     </div>
   `;
 
-  loadListCovers(list.books, listId);
+  loadListCovers(list.books);
 }
 
-async function loadListCovers(books, listId) {
+async function loadListCovers(books) {
   const batchSize = 8;
   for (let i = 0; i < books.length; i += batchSize) {
     const batch = books.slice(i, i + batchSize);
     const results = await Promise.allSettled(
-      batch.map(b => {
-        // If we already have a cached cover from Supabase list_books, build a result
-        if (b.coverUrl && b.bookKey) {
-          return Promise.resolve({
-            key: b.bookKey, title: b.title, author: b.author,
-            coverUrl: b.coverUrl, year: b.year || '', _cached: true,
-          });
-        }
-        // Otherwise go through searchBooksForList (which checks book_cover_cache → Google)
-        return searchBooksForList(b.title, b.author);
-      })
+      batch.map(b => searchBooksForList(b.title, b.author))
     );
     results.forEach((r, j) => {
       const idx = i + j;
@@ -2954,7 +1122,7 @@ async function loadListCovers(books, listId) {
         const tile = el.closest('.list-tile');
         if (tile) {
           tile._book = book;
-          tile.addEventListener('click', (e) => { if (!e.target.closest('.overlay-btn')) openBook(book); });
+          tile.addEventListener('click', async (e) => { if (!e.target.closest('.overlay-btn')) openBook(book); });
           tile.style.cursor = 'pointer';
         }
         if (book.coverUrl) {
@@ -2966,9 +1134,9 @@ async function loadListCovers(books, listId) {
         if (readBtn) {
           const isRead = Object.values(state.readBooks).some(rb => rb.title.toLowerCase() === book.title.toLowerCase());
           if (isRead) { readBtn.textContent = '✓'; readBtn.classList.add('read'); }
-          readBtn.onclick = (e) => {
+          readBtn.onclick = async (e) => {
             e.stopPropagation();
-            toggleRead(book.key || book.title, book.title, book.author, book.coverUrl, book.year);
+            await toggleRead(book.key || book.title, book.title, book.author, book.coverUrl, book.year);
             const nowRead = !!state.readBooks[book.key || book.title];
             readBtn.textContent = nowRead ? '✓' : '📖';
             readBtn.classList.toggle('read', nowRead);
@@ -2997,7 +1165,7 @@ async function loadAndRenderEditions(olWorkId) {
 
     section.style.display = '';
     const toggle = document.getElementById('editions-toggle');
-    heading.addEventListener('click', () => {
+    heading.addEventListener('click', async () => {
       const open = list.style.display !== 'none';
       list.style.display = open ? 'none' : '';
       if (toggle) toggle.textContent = open ? '▼ show' : '▲ hide';
@@ -3187,14 +1355,14 @@ async function loadBookDetail(book) {
 
   bindDetailActions(book);
   bindTabs();
-  bindAuthorLinks(book.author);
+  bindAuthorLinks();
   bindAdminCoverActions(book);
   fetchAndRenderDescription(book.key);
   loadAndRenderReviews(book);
   bindReviewForm(book);
   if (/^OL\d+W$/.test(book.key)) loadAndRenderEditions(book.key);
 
-  document.getElementById('book-back-btn')?.addEventListener('click', () => {
+  document.getElementById('book-back-btn')?.addEventListener('click', async () => {
     if (state._prevPage && state._prevPage !== 'book') navigate(state._prevPage);
     else navigate('home');
   });
@@ -3202,7 +1370,7 @@ async function loadBookDetail(book) {
 
 function bindTabs() {
   document.querySelectorAll('.tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
       btn.classList.add('active');
@@ -3213,13 +1381,13 @@ function bindTabs() {
 
   // Genre tags are clickable — search for that genre
   document.querySelectorAll('.genre-tag').forEach(tag => {
-    tag.addEventListener('click', () => {
+    tag.addEventListener('click', async () => {
       navigate('search', { genre: tag.dataset.genre });
     });
   });
 }
 
-function bindAuthorLinks(authorName) {
+function bindAuthorLinks() {
   document.querySelectorAll('.author-link').forEach(link => {
     link.addEventListener('click', async (e) => {
       e.preventDefault();
@@ -3247,24 +1415,22 @@ function bindAuthorLinks(authorName) {
 }
 
 function bindDetailActions(book) {
-  document.getElementById('detail-read-btn')?.addEventListener('click', () => {
-    toggleRead(book.key, book.title, book.author, book.coverUrl, book.year);
+  document.getElementById('detail-read-btn')?.addEventListener('click', async () => {
+    await toggleRead(book.key, book.title, book.author, book.coverUrl, book.year);
     const isRead = !!state.readBooks[book.key];
     const btn = document.getElementById('detail-read-btn');
-    const statusEl = document.getElementById('detail-status');
     if (btn) { btn.className = `detail-action-btn ${isRead ? 'active-read' : ''}`; btn.innerHTML = `<span>${isRead ? '✓' : '+'}</span> ${isRead ? 'Read' : 'Mark as Read'}`; }
-    if (statusEl) statusEl.textContent = isRead ? '✓ Read' : '— Not read';
   });
 
-  document.getElementById('detail-fav-btn')?.addEventListener('click', () => {
-    toggleFavorite(book);
+  document.getElementById('detail-fav-btn')?.addEventListener('click', async () => {
+    await toggleFavorite(book);
     const isFav = state.favorites.some(f => f.key === book.key);
     const btn = document.getElementById('detail-fav-btn');
     if (btn) { btn.className = `detail-action-btn ${isFav ? 'active-fav' : ''}`; btn.innerHTML = `<span>♥</span> ${isFav ? 'Favorited' : 'Add to Favorites'}`; }
   });
 
-  document.getElementById('detail-wish-btn')?.addEventListener('click', () => {
-    toggleWishlist(book);
+  document.getElementById('detail-wish-btn')?.addEventListener('click', async () => {
+    await toggleWishlist(book);
     const isWish = !!state.wishlist[book.key];
     const btn = document.getElementById('detail-wish-btn');
     if (btn) { btn.className = `detail-action-btn ${isWish ? 'active-wish' : ''}`; btn.innerHTML = `<span>🔖</span> ${isWish ? 'Saved' : 'Read Later'}`; }
@@ -3277,20 +1443,7 @@ function bindDetailActions(book) {
     star.addEventListener('click', async () => {
       if (!requireAuth('rate books')) return;
       const val = parseInt(star.dataset.val);
-      const current = state.ratings[book.key] || 0;
-      state.ratings[book.key] = current === val ? 0 : val;
-      if (state.user) {
-        if (state.ratings[book.key] > 0) {
-          await sb.from('ratings').upsert({
-            user_id: state.user.id, book_key: book.key, rating: state.ratings[book.key],
-            book_title: book.title || null, book_author: book.author || null, cover_url: book.coverUrl || null,
-          }, { onConflict: 'user_id,book_key' });
-        } else {
-          await sb.from('ratings').delete()
-            .eq('user_id', state.user.id).eq('book_key', book.key);
-        }
-      }
-      save();
+      if (!await toggleBookRating(book, val)) return;
       stars.forEach((s, i) => s.classList.toggle('filled', i < state.ratings[book.key]));
       showToast(state.ratings[book.key] ? `Rated "${book.title}" ${state.ratings[book.key]}★` : 'Rating removed', 'info');
     });
@@ -3334,11 +1487,11 @@ function bindAdminCoverActions(book) {
           </div>
         `;
         picker.querySelectorAll('.cover-option').forEach(el => {
-          el.addEventListener('click', () => {
+          el.addEventListener('click', async () => {
             const idx = parseInt(el.dataset.idx);
             const chosen = options[idx];
             if (!chosen) return;
-            adminUpdateCover(book.title, book.author, chosen.url, book.key, book.year);
+            if (!await adminUpdateCover(book.title, book.author, chosen.url, book.key, book.year)) return;
             book.coverUrl = chosen.url;
             const img = document.getElementById('detail-cover-img');
             const placeholder = document.getElementById('detail-cover-placeholder');
@@ -3364,11 +1517,11 @@ function bindAdminCoverActions(book) {
     btn.disabled = false;
   });
 
-  document.getElementById('admin-custom-cover')?.addEventListener('click', () => {
+  document.getElementById('admin-custom-cover')?.addEventListener('click', async () => {
     const url = prompt('Paste a cover image URL:');
     if (!url) return;
     if (!url.startsWith('http')) { showToast('Please enter a valid URL', 'error'); return; }
-    adminUpdateCover(book.title, book.author, url, book.key, book.year);
+    if (!await adminUpdateCover(book.title, book.author, url, book.key, book.year)) return;
     book.coverUrl = url;
     const img = document.getElementById('detail-cover-img');
     const placeholder = document.getElementById('detail-cover-placeholder');
@@ -3419,7 +1572,7 @@ async function loadAndRenderReviews(book) {
 
   container.querySelectorAll('.review-delete-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
-      await deleteReview(btn.dataset.reviewId);
+      if (!await deleteReview(btn.dataset.reviewId)) return;
       showToast('Review deleted');
       loadAndRenderReviews(book);
     });
@@ -3430,7 +1583,7 @@ function bindReviewForm(book) {
   let reviewRating = 0;
   const stars = document.querySelectorAll('.review-form-star');
   stars.forEach(star => {
-    star.addEventListener('click', () => {
+    star.addEventListener('click', async () => {
       const val = parseInt(star.dataset.val);
       reviewRating = reviewRating === val ? 0 : val;
       stars.forEach((s, i) => s.textContent = i < reviewRating ? '★' : '☆');
@@ -3516,13 +1669,12 @@ async function doGenreSearch(genre) {
 
   const seenTitles = new Set();
   state.searchResults = [];
-  state.searchQuery = genre;
 
-  grid.onclick = e => {
+  grid.onclick = async e => {
     const btn = e.target.closest('.overlay-btn');
     if (btn) {
       if (btn.classList.contains('mark-read'))
-        toggleRead(btn.dataset.key, btn.dataset.title, btn.dataset.author, btn.dataset.cover, btn.dataset.year);
+        await toggleRead(btn.dataset.key, btn.dataset.title, btn.dataset.author, btn.dataset.cover, btn.dataset.year);
       else if (btn.classList.contains('rate-btn')) {
         const book = state.searchResults.find(b => b.key === btn.dataset.key);
         if (book) openRatingModal(book);
@@ -3579,7 +1731,6 @@ async function doGenreSearch(genre) {
 
 async function doSearch(query) {
   if (!query.trim()) return;
-  state.searchQuery = query;
   document.getElementById('search-results-info').textContent = 'Searching…';
   renderGridSkeletons('search-results-grid', 12);
 
@@ -3608,20 +1759,20 @@ function renderBookGrid(containerId, books) {
   if (!books.length) { el.innerHTML = `<div class="empty-state"><p>No books found.</p></div>`; return; }
   el.innerHTML = books.map(book => bookCardHTML(book)).join('');
   el.querySelectorAll('.book-card').forEach(card => {
-    card.addEventListener('click', (e) => {
+    card.addEventListener('click', async (e) => {
       if (e.target.closest('.overlay-btn')) return;
       const book = books.find(b => b.key === card.dataset.key);
       if (book) openBook(book);
     });
   });
   el.querySelectorAll('.overlay-btn.mark-read').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      toggleRead(btn.dataset.key, btn.dataset.title, btn.dataset.author, btn.dataset.cover, btn.dataset.year);
+      await toggleRead(btn.dataset.key, btn.dataset.title, btn.dataset.author, btn.dataset.cover, btn.dataset.year);
     });
   });
   el.querySelectorAll('.overlay-btn.rate-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const book = books.find(b => b.key === btn.dataset.key);
       if (book) openRatingModal(book);
@@ -3660,16 +1811,27 @@ function bookCardHTML(book) {
 }
 
 // ─── COLLECTION PAGE ──────────────────────────────────────────────────────
+function normalizeStoredBook(book) {
+  return {
+    ...book,
+    key: book.key || book.book_key || '',
+    title: book.title || book.book_title || 'Unknown',
+    author: book.author || book.book_author || '',
+    coverUrl: book.coverUrl || book.cover_url,
+    dateRead: book.dateRead || book.date_read || '',
+  };
+}
+
 function collectionItemHTML(book) {
-  const cover = coverUrl(book.coverUrl || book.cover_url, 'S');
+  const cover = coverUrl(book.coverUrl, 'S');
   const rating = book.rating || 0;
   const stars = rating ? '★'.repeat(rating) + '☆'.repeat(5 - rating) : '';
-  const date = book.dateRead || book.date_read || '';
-  return `<div class="collection-item" data-book-key="${escHtml(book.key || book.book_key || '')}">
+  const date = book.dateRead || '';
+  return `<div class="collection-item" data-book-key="${escHtml(book.key || '')}">
     ${cover ? `<img class="collection-item-cover" src="${escHtml(cover)}" alt="" loading="lazy" onerror="this.style.background='var(--bg-secondary)';this.removeAttribute('src')">` : '<div class="collection-item-cover"></div>'}
     <div class="collection-item-info">
-      <div class="collection-item-title">${escHtml(book.title || book.book_title || 'Unknown')}</div>
-      <div class="collection-item-author">${escHtml(book.author || book.book_author || '')}</div>
+      <div class="collection-item-title">${escHtml(book.title || 'Unknown')}</div>
+      <div class="collection-item-author">${escHtml(book.author || '')}</div>
     </div>
     <div class="collection-item-right">
       ${stars ? `<div class="collection-item-rating">${stars}</div>` : ''}
@@ -3679,6 +1841,7 @@ function collectionItemHTML(book) {
 }
 
 function loadCollectionPage({ title, books, backPage, backParams = {} }) {
+  books = (books || []).map(normalizeStoredBook);
   navigate('collection');
   document.getElementById('collection-title').textContent = title;
   document.getElementById('collection-back-btn').onclick = () => navigate(backPage, backParams);
@@ -3690,9 +1853,9 @@ function loadCollectionPage({ title, books, backPage, backParams = {} }) {
   }
   listEl.innerHTML = books.map(collectionItemHTML).join('');
   listEl.querySelectorAll('.collection-item').forEach((el, i) => {
-    el.addEventListener('click', () => {
+    el.addEventListener('click', async () => {
       const b = books[i];
-      if (b) openBook({ key: b.key || b.book_key, title: b.title || b.book_title, author: b.author || b.book_author, coverUrl: b.coverUrl || b.cover_url, year: b.year || '' });
+      if (b) openBook({ key: b.key, title: b.title, author: b.author, coverUrl: b.coverUrl, year: b.year || '' });
     });
   });
 }
@@ -3701,7 +1864,7 @@ function loadCollectionPage({ title, books, backPage, backParams = {} }) {
 async function loadUserProfile(userId) {
   if (!sb) return;
 
-  const { data: profile } = await sb.from('profiles').select('username, bio, avatar_url').eq('id', userId).single();
+  const { data: profile } = await queryResult(sb.from('profiles').select('username, bio, avatar_url').eq('id', userId).single());
   if (!profile) return;
 
   // Header
@@ -3718,15 +1881,15 @@ async function loadUserProfile(userId) {
 
   // Fetch everything in parallel
   const [
-    { data: favsData,    error: favsErr },
-    { data: readsData,   error: readsErr },
-    { data: ratingsData, error: ratingsErr },
-    { data: listsData,   error: listsErr },
+    { data: favsData },
+    { data: readsData },
+    { data: ratingsData },
+    { data: listsData },
   ] = await Promise.all([
-    sb.from('favorites').select('book_key, title, author, cover_url, position').eq('user_id', userId),
-    sb.from('read_books').select('book_key, title, author, cover_url, year, date_read').eq('user_id', userId),
-    sb.from('ratings').select('book_key, rating, book_title, book_author, cover_url').eq('user_id', userId).gt('rating', 0),
-    sb.from('lists').select('id, title, description').eq('user_id', userId).eq('is_curated', false),
+    queryResult(sb.from('favorites').select('book_key, title, author, cover_url, position').eq('user_id', userId)),
+    queryResult(sb.from('read_books').select('book_key, title, author, cover_url, year, date_read').eq('user_id', userId)),
+    queryResult(sb.from('ratings').select('book_key, rating, book_title, book_author, cover_url').eq('user_id', userId).gt('rating', 0)),
+    queryResult(sb.from('lists').select('id, title, description').eq('user_id', userId).eq('is_curated', false)),
   ]);
 
   const favs    = (favsData    || []).sort((a, b) => (a.position ?? 99) - (b.position ?? 99));
@@ -3755,13 +1918,13 @@ async function loadUserProfile(userId) {
   }
 
   document.getElementById('user-stat-item-read')?.addEventListener('click', () =>
-    loadCollectionPage({ title: `${profile.username}'s Books`, books: reads.map(r => ({ ...r, key: r.book_key, coverUrl: r.cover_url, dateRead: r.date_read })), backPage: 'user', backParams: { userId } })
+    loadCollectionPage({ title: `${profile.username}'s Books`, books: reads, backPage: 'user', backParams: { userId } })
   );
   document.getElementById('user-stat-item-rated')?.addEventListener('click', () =>
     loadCollectionPage({ title: `${profile.username}'s Rated Books`, books: ratings.map(resolveRatedBook), backPage: 'user', backParams: { userId } })
   );
   document.getElementById('user-stat-item-favs')?.addEventListener('click', () =>
-    loadCollectionPage({ title: `${profile.username}'s Favourites`, books: favs.map(f => ({ key: f.book_key, title: f.title, author: f.author, coverUrl: f.cover_url })), backPage: 'user', backParams: { userId } })
+    loadCollectionPage({ title: `${profile.username}'s Favourites`, books: favs, backPage: 'user', backParams: { userId } })
   );
 
   // Favourites grid (read-only)
@@ -3779,7 +1942,7 @@ async function loadUserProfile(userId) {
         </div>`;
       }).join('');
       favsGrid.querySelectorAll('.fav-slot.filled').forEach(slot => {
-        slot.addEventListener('click', () => {
+        slot.addEventListener('click', async () => {
           const f = favs.find(x => x.book_key === slot.dataset.key);
           if (f) openBook({ key: f.book_key, title: f.title, author: f.author, coverUrl: f.cover_url });
         });
@@ -3796,7 +1959,7 @@ async function loadUserProfile(userId) {
       ? reads.map(r => collectionItemHTML({ key: r.book_key, title: r.title, author: r.author, coverUrl: r.cover_url, dateRead: r.date_read })).join('')
       : '<p style="color:var(--text-muted);font-style:italic;font-size:13px">No books read yet.</p>';
     readList.querySelectorAll('.collection-item').forEach((el, i) => {
-      el.addEventListener('click', () => {
+      el.addEventListener('click', async () => {
         const r = reads[i];
         if (r) openBook({ key: r.book_key, title: r.title, author: r.author, coverUrl: r.cover_url, year: r.year || '' });
       });
@@ -3842,7 +2005,7 @@ function loadProfilePage() {
   document.getElementById('stat-item-read')?.addEventListener('click', () =>
     loadCollectionPage({ title: 'Books Read', books: Object.values(state.readBooks), backPage: 'profile' })
   );
-  document.getElementById('stat-item-rated')?.addEventListener('click', () => {
+  document.getElementById('stat-item-rated')?.addEventListener('click', async () => {
     const books = Object.entries(state.ratings)
       .filter(([, v]) => v > 0)
       .map(([k, v]) => ({ ...(state.readBooks[k] || state.wishlist[k] || state.favorites.find(f => f.key === k) || { key: k }), rating: v }));
@@ -3903,7 +2066,7 @@ async function renderProfileLists() {
   if (!myLists.length) { section.style.display = 'none'; return; }
 
   section.style.display = '';
-  grid.innerHTML = myLists.map(list => listCardHTML(list, 'user')).join('');
+  grid.innerHTML = myLists.map(list => listCardHTML(list)).join('');
 
   grid.querySelectorAll('.list-card').forEach(card => {
     card.addEventListener('click', () => openList(card.dataset.listId));
@@ -3912,7 +2075,7 @@ async function renderProfileLists() {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (!confirm('Delete this list?')) return;
-      await deleteUserList(btn.dataset.listId);
+      if (!await deleteUserList(btn.dataset.listId)) return;
       showToast('List deleted');
       listsPageLoaded = false;
       renderProfileLists();
@@ -3924,18 +2087,7 @@ async function renderProfileLists() {
     const previewEl = document.getElementById(`${list.id}-preview`);
     if (!previewEl || previewEl.dataset.loaded) continue;
     previewEl.dataset.loaded = '1';
-    const first5 = (list.books || []).slice(0, 5);
-    const results = await Promise.allSettled(first5.map(b => b.coverUrl ? Promise.resolve({ coverUrl: b.coverUrl }) : searchBooksForList(b.title, b.author)));
-    const slots = previewEl.querySelectorAll('.list-placeholder-cover');
-    results.forEach((r, i) => {
-      if (r.status === 'fulfilled' && r.value?.coverUrl) {
-        const img = document.createElement('img');
-        img.src = coverUrl(r.value.coverUrl, 'S');
-        img.alt = first5[i]?.title || '';
-        img.style.cssText = 'flex:1;object-fit:cover;border-right:2px solid var(--bg-primary)';
-        slots[i]?.replaceWith(img);
-      }
-    });
+    await renderListPreviewCovers(previewEl, list.books || []);
   }
 }
 
@@ -3968,10 +2120,10 @@ function renderFavorites() {
 
   // Bind favorite actions
   grid.querySelectorAll('.fav-remove-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => { e.stopPropagation(); removeFavorite(parseInt(btn.dataset.idx)); });
+    btn.addEventListener('click', async (e) => { e.stopPropagation(); removeFavorite(parseInt(btn.dataset.idx)); });
   });
   grid.querySelectorAll('.fav-open-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const fav = state.favorites[parseInt(btn.dataset.idx)];
       if (fav) openBook(fav);
@@ -3979,7 +2131,7 @@ function renderFavorites() {
   });
   // Also make the whole card clickable (except overlay buttons)
   grid.querySelectorAll('.fav-slot.filled').forEach(slot => {
-    slot.addEventListener('click', (e) => {
+    slot.addEventListener('click', async (e) => {
       if (e.target.closest('.fav-remove-btn') || e.target.closest('.fav-open-btn')) return;
       const idx = parseInt(slot.dataset.slot);
       const fav = state.favorites[idx];
@@ -3989,15 +2141,8 @@ function renderFavorites() {
 }
 
 async function removeFavorite(index) {
-  const fav = state.favorites[index];
-  state.favorites.splice(index, 1);
-  if (state.user && fav) {
-    await sb.from('favorites').delete()
-      .eq('user_id', state.user.id).eq('book_key', fav.key);
-  }
-  save();
-  renderFavorites();
-  showToast('Removed from favourites');
+  const book = state.favorites[index];
+  if (book && await toggleFavorite(book)) renderFavorites();
 }
 
 function renderReadList() {
@@ -4028,77 +2173,67 @@ function renderReadList() {
 
 // ─── ACTIONS ──────────────────────────────────────────────────────────────
 async function toggleRead(key, title, author, coverUrl, year) {
-  if (!requireAuth('track books')) return;
-  if (state.readBooks[key]) {
-    delete state.readBooks[key];
-    showToast(`Removed "${title}" from read list`);
-    if (state.user) {
-      await sb.from('read_books').delete()
-        .eq('user_id', state.user.id).eq('book_key', key);
-    }
-  } else {
+  return runBookMutation('read:' + key, async () => {
+    if (!requireAuth('track books')) return false;
+    const removing = !!state.readBooks[key];
     const dateRead = new Date().toLocaleDateString('en-NL', { month: 'short', year: 'numeric' });
-    state.readBooks[key] = { key, title, author, coverUrl, year, dateRead };
-    showToast(`Marked "${title}" as read ✓`);
     if (state.user) {
-      await sb.from('read_books').upsert({
-        user_id: state.user.id, book_key: key, title, author,
-        cover_url: coverUrl, year, date_read: dateRead,
-      }, { onConflict: 'user_id,book_key' });
+      const request = removing
+        ? queryResult(sb.from('read_books').delete().eq('user_id', state.user.id).eq('book_key', key))
+        : queryResult(sb.from('read_books').upsert({ user_id: state.user.id, book_key: key, title, author,
+            cover_url: coverUrl, year, date_read: dateRead }, { onConflict: 'user_id,book_key' }));
+      if (!await saveMutation(request)) return false;
     }
-  }
-  save();
+    if (removing) delete state.readBooks[key];
+    else state.readBooks[key] = { key, title, author, coverUrl, year, dateRead };
+    saveLocalGuestData();
+    showToast(removing ? `Removed "${title}" from read list` : `Marked "${title}" as read ✓`);
+    return true;
+  });
 }
 
 async function toggleFavorite(book) {
-  if (!requireAuth('add favourites')) return;
-  const idx = state.favorites.findIndex(f => f.key === book.key);
-  if (idx >= 0) {
-    state.favorites.splice(idx, 1);
-    showToast('Removed from favourites');
-    if (state.user) {
-      await sb.from('favorites').delete()
-        .eq('user_id', state.user.id).eq('book_key', book.key);
+  return runBookMutation('favorite:' + book.key, async () => {
+    if (!requireAuth('add favourites')) return false;
+    const idx = state.favorites.findIndex(f => f.key === book.key);
+    if (idx < 0 && state.favorites.length >= 4) {
+      showToast('You can only have 4 favourites. Remove one first.', 'error'); return false;
     }
-  } else {
-    if (state.favorites.length >= 4) { showToast('You can only have 4 favourites. Remove one first.', 'error'); return; }
-    state.favorites.push({ key: book.key, title: book.title, author: book.author, coverUrl: book.coverUrl });
-    showToast(`Added "${book.title}" to favourites ♥`);
     if (state.user) {
-      await sb.from('favorites').upsert({
-        user_id: state.user.id, book_key: book.key, title: book.title,
-        author: book.author, cover_url: book.coverUrl, position: state.favorites.length - 1,
-      }, { onConflict: 'user_id,book_key' });
+      const request = idx >= 0
+        ? queryResult(sb.from('favorites').delete().eq('user_id', state.user.id).eq('book_key', book.key))
+        : queryResult(sb.from('favorites').upsert({ user_id: state.user.id, book_key: book.key, title: book.title,
+            author: book.author, cover_url: book.coverUrl, position: state.favorites.length }, { onConflict: 'user_id,book_key' }));
+      if (!await saveMutation(request)) return false;
     }
-  }
-  save();
+    if (idx >= 0) state.favorites.splice(idx, 1);
+    else state.favorites.push({ key: book.key, title: book.title, author: book.author, coverUrl: book.coverUrl });
+    saveLocalGuestData();
+    showToast(idx >= 0 ? 'Removed from favourites' : `Added "${book.title}" to favourites ♥`);
+    return true;
+  });
 }
 
 // ─── WISHLIST (READ LATER) ──────────────────────────────────────────────
 async function toggleWishlist(book) {
-  if (!requireAuth('save to wishlist')) return;
-  const key = book.key;
-  if (state.wishlist[key]) {
-    delete state.wishlist[key];
-    showToast(`Removed "${book.title}" from Read Later`);
-    if (state.user) {
-      try { await sb.from('wishlist').delete().eq('user_id', state.user.id).eq('book_key', key); }
-      catch (e) { }
-    }
-  } else {
+  return runBookMutation('wishlist:' + book.key, async () => {
+    if (!requireAuth('save to wishlist')) return false;
+    const key = book.key;
+    const removing = !!state.wishlist[key];
     const dateAdded = new Date().toISOString();
-    state.wishlist[key] = { key, title: book.title, author: book.author, coverUrl: book.coverUrl, year: book.year, dateAdded };
-    showToast(`Added "${book.title}" to Read Later 🔖`);
     if (state.user) {
-      try {
-        await sb.from('wishlist').upsert({
-          user_id: state.user.id, book_key: key, title: book.title, author: book.author,
-          cover_url: book.coverUrl, year: book.year, date_added: dateAdded,
-        }, { onConflict: 'user_id,book_key' });
-      } catch (e) { }
+      const request = removing
+        ? queryResult(sb.from('wishlist').delete().eq('user_id', state.user.id).eq('book_key', key))
+        : queryResult(sb.from('wishlist').upsert({ user_id: state.user.id, book_key: key, title: book.title,
+            author: book.author, cover_url: book.coverUrl, year: book.year, date_added: dateAdded }, { onConflict: 'user_id,book_key' }));
+      if (!await saveMutation(request)) return false;
     }
-  }
-  save();
+    if (removing) delete state.wishlist[key];
+    else state.wishlist[key] = { key, title: book.title, author: book.author, coverUrl: book.coverUrl, year: book.year, dateAdded };
+    saveLocalGuestData();
+    showToast(removing ? `Removed "${book.title}" from Read Later` : `Added "${book.title}" to Read Later 🔖`);
+    return true;
+  });
 }
 
 function renderWishlist() {
@@ -4167,23 +2302,27 @@ function closeRatingModal() {
   state.pendingRatingBook = null;
 }
 
+async function toggleBookRating(book, val) {
+  return runBookMutation('rating:' + book.key, async () => {
+    const rating = state.ratings[book.key] === val ? 0 : val;
+    if (state.user) {
+      const request = rating > 0
+        ? queryResult(sb.from('ratings').upsert({ user_id: state.user.id, book_key: book.key, rating,
+            book_title: book.title || null, book_author: book.author || null, cover_url: book.coverUrl || null }, { onConflict: 'user_id,book_key' }))
+        : queryResult(sb.from('ratings').delete().eq('user_id', state.user.id).eq('book_key', book.key));
+      if (!await saveMutation(request)) return false;
+    }
+    state.ratings[book.key] = rating;
+    saveLocalGuestData();
+    return true;
+  });
+}
+
 async function saveRating(val) {
   const book = state.pendingRatingBook;
   if (!book) return;
   if (!requireAuth('rate books')) return;
-  state.ratings[book.key] = (state.ratings[book.key] === val) ? 0 : val;
-  if (state.user) {
-    if (state.ratings[book.key] > 0) {
-      await sb.from('ratings').upsert({
-        user_id: state.user.id, book_key: book.key, rating: state.ratings[book.key],
-        book_title: book.title || null, book_author: book.author || null, cover_url: book.coverUrl || null,
-      }, { onConflict: 'user_id,book_key' });
-    } else {
-      await sb.from('ratings').delete()
-        .eq('user_id', state.user.id).eq('book_key', book.key);
-    }
-  }
-  save();
+  if (!await toggleBookRating(book, val)) return;
   closeRatingModal();
   showToast(state.ratings[book.key] ? `Rated ${state.ratings[book.key]}★` : 'Rating removed');
 }
@@ -4252,7 +2391,7 @@ function renderCreateListBooks() {
   `).join('');
 
   el.querySelectorAll('.create-list-remove-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       createListBooks.splice(parseInt(btn.dataset.idx), 1);
       renderCreateListBooks();
     });
@@ -4282,7 +2421,7 @@ async function searchBooksForListCreation(query) {
     `).join('');
 
     resultsEl.querySelectorAll('.create-list-search-item').forEach(item => {
-      item.addEventListener('click', () => {
+      item.addEventListener('click', async () => {
         const selected = createListSearchResults[Number(item.dataset.index)];
         if (!selected) return;
         const { title, author } = selected;
@@ -4315,7 +2454,7 @@ async function submitCreateList() {
   submitBtn.textContent = 'Creating…';
 
   try {
-    const listId = await createUserList(title, desc, createListBooks);
+    await createUserList(title, desc, createListBooks);
     closeCreateListModal();
     resetCreateListDraft();
     showToast('List created!');
@@ -4370,7 +2509,8 @@ function closeAuthModal() {
 // ─── INIT ─────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   // Init auth first
-  await initAuth();
+  try { await initAuth(); }
+  catch (error) { showToast(error.message || "Could not load your account.", "error"); updateAuthUI(); }
 
   // Nav
   document.querySelectorAll('nav a[data-page]').forEach(a => {
@@ -4382,7 +2522,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Mobile menu
-  document.getElementById('mobile-menu-btn')?.addEventListener('click', () => {
+  document.getElementById('mobile-menu-btn')?.addEventListener('click', async () => {
     document.getElementById('main-nav')?.classList.toggle('open');
   });
 
@@ -4419,7 +2559,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     try {
       if (authMode === 'signup') {
-        const data = await signUp(email, password, username || 'Reader');
+        await signUp(email, password, username || 'Reader');
         closeAuthModal();
         // Show confirmation modal
         document.getElementById('confirm-email-addr').textContent = email;
@@ -4447,7 +2587,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
-  document.getElementById('confirm-ok-btn')?.addEventListener('click', () => {
+  document.getElementById('confirm-ok-btn')?.addEventListener('click', async () => {
     document.getElementById('confirm-modal').classList.remove('open');
   });
 
@@ -4457,7 +2597,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Search page
-  document.getElementById('search-btn')?.addEventListener('click', () => {
+  document.getElementById('search-btn')?.addEventListener('click', async () => {
     const q = document.getElementById('main-search-input').value.trim();
     if (q) doSearch(q);
   });
@@ -4465,7 +2605,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (e.key === 'Enter' && e.target.value.trim()) doSearch(e.target.value.trim());
   });
   document.querySelectorAll('.filter-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
+    chip.addEventListener('click', async () => {
       document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
       chip.classList.add('active');
       const genre = chip.dataset.genre;
@@ -4475,7 +2615,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // Hero
-  document.getElementById('hero-search-btn')?.addEventListener('click', () => {
+  document.getElementById('hero-search-btn')?.addEventListener('click', async () => {
     if (state.user) {
       navigate('search');
       setTimeout(() => document.getElementById('main-search-input')?.focus(), 100);
@@ -4484,7 +2624,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
   document.getElementById('hero-profile-btn')?.addEventListener('click', () => navigate('profile'));
-  document.getElementById('hero-explore-btn')?.addEventListener('click', () => {
+  document.getElementById('hero-explore-btn')?.addEventListener('click', async () => {
     navigate('search');
     setTimeout(() => document.getElementById('main-search-input')?.focus(), 100);
   });
@@ -4512,7 +2652,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('rating-modal')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeRatingModal(); });
 
   // Profile editing
-  document.getElementById('edit-username-btn')?.addEventListener('click', () => {
+  document.getElementById('edit-username-btn')?.addEventListener('click', async () => {
     const form = document.getElementById('edit-name-form');
     const input = document.getElementById('username-input');
     const bioInput = document.getElementById('bio-input');
@@ -4527,17 +2667,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     const bioVal = document.getElementById('bio-input')?.value.trim() || '';
     const avatarVal = document.getElementById('avatar-url-input')?.value.trim() || '';
     if (val) {
+      if (state.user) {
+        if (!await saveMutation(queryResult(sb.from('profiles').update({ username: val, bio: bioVal, avatar_url: avatarVal || null }).eq('id', state.user.id)))) return;
+      }
       state.username = val;
       state.bio = bioVal;
       state.avatarUrl = avatarVal;
-      if (state.user) {
-        const { error: updateErr } = await sb.from('profiles').update({ username: val, bio: bioVal, avatar_url: avatarVal || null }).eq('id', state.user.id);
-        if (updateErr) {
-          // avatar_url column might not exist yet — try without it
-          await sb.from('profiles').update({ username: val, bio: bioVal }).eq('id', state.user.id);
-        }
-      }
-      save();
+      saveLocalGuestData();
       document.getElementById('profile-username').textContent = val;
       // Update avatar
       const avatarEl = document.getElementById('profile-avatar-letter');
@@ -4565,28 +2701,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Shelf arrows
   initShelfArrows();
-
-  // Strip white background from bookend images via canvas
-  document.querySelectorAll('.bookend-img').forEach(img => {
-    const process = () => {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      try {
-        ctx.drawImage(img, 0, 0);
-        const d = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        for (let i = 0; i < d.data.length; i += 4) {
-          if (d.data[i] > 235 && d.data[i+1] > 235 && d.data[i+2] > 235)
-            d.data[i+3] = 0;
-        }
-        ctx.putImageData(d, 0, 0);
-        img.src = canvas.toDataURL('image/png');
-      } catch(e) { /* CORS blocked — image shows as-is */ }
-    };
-    if (img.complete && img.naturalWidth) process();
-    else img.addEventListener('load', process);
-  });
 
   // Create list modal
   document.getElementById('create-list-btn')?.addEventListener('click', openCreateListModal);

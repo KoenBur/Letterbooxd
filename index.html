@@ -7,8 +7,8 @@
   <meta name="description" content="Keep a personal record of the books you've read and discover what to read next with Letterbooxd.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="css/style.css?v=7c15814">
-  <link rel="stylesheet" href="css/night-library.css?v=7c15814">
+  <link rel="stylesheet" href="css/style.css?v=cleanup-20260927">
+  <link rel="stylesheet" href="css/night-library.css?v=cleanup-20260927">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='28'>📚</text></svg>">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.min.js"></script>
 </head>
@@ -82,7 +82,7 @@
           <div id="hp-avatars" class="stat-card-avatars"></div>
         </div>
       </div>
-      <div class="stat-card">s
+      <div class="stat-card">
         <div class="stat-card-badge">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
         </div>
@@ -129,9 +129,8 @@
       <div class="bookshelf-wrap">
         <div class="bookshelf" id="shelf-popular">
           <div class="shelf-track" id="popular-books-grid"></div>
-          <div class="shelf-plank"></div>
         </div>
-        <button class="shelf-arrow shelf-arrow-right" data-target="shelf-popular" data-list="curated_popular_100"><img src="https://ycejifwmvlpjewbsbrub.supabase.co/storage/v1/object/public/Public_Image/bookshelves.PNG" alt="" class="bookend-img" crossorigin="anonymous"></button>
+        <button class="shelf-arrow shelf-arrow-right" data-target="shelf-popular" data-list="curated_popular_100"></button>
       </div>
     </section>
 
@@ -140,9 +139,8 @@
       <div class="bookshelf-wrap">
         <div class="bookshelf" id="shelf-classics">
           <div class="shelf-track" id="classics-books-grid"></div>
-          <div class="shelf-plank"></div>
         </div>
-        <button class="shelf-arrow shelf-arrow-right" data-target="shelf-classics" data-list="bbc"><img src="https://ycejifwmvlpjewbsbrub.supabase.co/storage/v1/object/public/Public_Image/bookshelves.PNG" alt="" class="bookend-img" crossorigin="anonymous"></button>
+        <button class="shelf-arrow shelf-arrow-right" data-target="shelf-classics" data-list="bbc"></button>
       </div>
     </section>
 
@@ -151,15 +149,13 @@
       <div class="bookshelf-wrap">
         <div class="bookshelf" id="shelf-fiction">
           <div class="shelf-track" id="fiction-books-grid"></div>
-          <div class="shelf-plank"></div>
         </div>
-        <button class="shelf-arrow shelf-arrow-right" data-target="shelf-fiction" data-list="curated_scifi_100"><img src="https://ycejifwmvlpjewbsbrub.supabase.co/storage/v1/object/public/Public_Image/bookshelves.PNG" alt="" class="bookend-img" crossorigin="anonymous"></button>
+        <button class="shelf-arrow shelf-arrow-right" data-target="shelf-fiction" data-list="curated_scifi_100"></button>
       </div>
     </section>
   </main>
 </div>
 
-<!-- ─── LISTS PAGE ─────────────────────────────────────────────────────── -->
 <!-- BLIND DATE GAME -->
 <div class="page" id="page-blind-date">
   <main class="blind-date-shell">
@@ -179,6 +175,7 @@
   </main>
 </div>
 
+<!-- ─── LISTS PAGE ─────────────────────────────────────────────────────── -->
 <div class="page" id="page-lists">
   <div class="search-hero">
     <div class="search-hero-inner" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
@@ -475,6 +472,10 @@
 </div>
 
 <div class="toast-container" id="toast-container"></div>
-<script src="js/app.js?v=741252a-fix1"></script>
+<script src="js/curated-lists.js?v=cleanup-20260927"></script>
+<script src="js/catalog.js?v=cleanup-20260927"></script>
+<script src="js/social.js?v=cleanup-20260927"></script>
+<script src="js/blind-date.js?v=cleanup-20260927"></script>
+<script src="js/app.js?v=cleanup-20260927"></script>
 </body>
 </html>
