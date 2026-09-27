@@ -501,9 +501,9 @@ main { max-width: 1400px; padding: 44px clamp(18px, 3.5vw, 54px) 84px; }
 .list-card { overflow: hidden; border: 0; border-radius: 4px; background: var(--night-2); box-shadow: var(--shadow-card); }
 .list-card::before { height: 3px; background: var(--coral); }
 .list-card:hover { transform: translateY(-5px); background: var(--night-3); box-shadow: var(--shadow-lift); }
-.list-card-books { height: 155px; background: var(--paper-2); }
+.list-card-books { height: 155px; background: var(--night-2); }
 .list-card-books img { border-color: var(--night-2) !important; }
-.list-preview-spacer { border-color: oklch(18% .035 323 / .16); background: oklch(91% .018 83); }
+.list-preview-spacer { border-color: var(--line-light); background: var(--night-2); }
 .list-preview-empty { color: oklch(42% .035 323); }
 .list-card-info { padding: 19px 20px 22px; }
 .list-type-badge { border-radius: 50%; background: var(--coral); }
@@ -684,6 +684,80 @@ main { max-width: 1400px; padding: 44px clamp(18px, 3.5vw, 54px) 84px; }
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
   }
+}
+
+/* Accessibility and interaction refinements */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+:focus-visible {
+  outline: 2px solid var(--coral-hot);
+  outline-offset: 3px;
+}
+
+.wishlist-tile {
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.modal-star {
+  padding: 4px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+}
+
+.profile-visibility-setting {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.profile-visibility-setting input { margin-top: 2px; accent-color: var(--coral); }
+
+#read-sort {
+  min-height: 34px;
+  padding: 7px 30px 7px 10px;
+  appearance: none;
+  border: 1px solid var(--line-light);
+  border-radius: 2px;
+  background-color: var(--night-2);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='m1 1 5 5 5-5' fill='none' stroke='%23ff765f' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: right 10px center;
+  background-repeat: no-repeat;
+  color: var(--light);
+  color-scheme: dark;
+  font: 700 11px/1 var(--font-body);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+#read-sort:hover { border-color: var(--coral); }
+#read-sort option { background: var(--night-2); color: var(--light); }
+
+@media (max-width: 680px) {
+  .mobile-menu-btn,
+  .modal-close-x,
+  .modal-cancel,
+  .back-btn,
+  .btn-sm { min-height: 44px; }
+  .modal-close-x { min-width: 44px; }
 }
 
 /* Blind Date — a sealed catalogue card, not a dating-app parody */

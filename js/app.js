@@ -23,6 +23,48 @@ async function saveMutation(request) {
   }
 }
 
+let modalTrigger = null;
+function openModal(modalId, focusSelector) {
+  const overlay = document.getElementById(modalId);
+  if (!overlay) return;
+  modalTrigger = document.activeElement;
+  overlay.classList.add('open');
+  overlay.setAttribute('aria-hidden', 'false');
+  const target = focusSelector ? overlay.querySelector(focusSelector) : overlay.querySelector('button, input, textarea, [tabindex]:not([tabindex="-1"])');
+  setTimeout(() => target?.focus(), 0);
+}
+
+function closeModal(modalId) {
+  const overlay = document.getElementById(modalId);
+  if (!overlay) return;
+  overlay.classList.remove('open');
+  overlay.setAttribute('aria-hidden', 'true');
+  const trigger = modalTrigger;
+  modalTrigger = null;
+  trigger?.focus?.();
+}
+
+function trapModalFocus(event) {
+  const overlay = document.querySelector('.modal-overlay.open');
+  if (!overlay) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    if (overlay.id === 'auth-modal') closeAuthModal();
+    else if (overlay.id === 'rating-modal') closeRatingModal();
+    else if (overlay.id === 'create-list-modal') closeCreateListModal();
+    else if (overlay.id === 'confirm-modal') closeModal('confirm-modal');
+    return;
+  }
+  if (event.key !== 'Tab') return;
+  const focusable = [...overlay.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+    .filter(el => !el.closest('[aria-hidden="true"]'));
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+}
+
 // Prevent a second click from starting the same save before the first finishes.
 const pendingBookMutations = new Set();
 async function runBookMutation(key, action) {
@@ -50,6 +92,7 @@ const state = {
   isAdmin: false,
   bio: '',
   avatarUrl: '',
+  wishlistIsPublic: true,
   blindDate: null,
 };
 
@@ -224,15 +267,28 @@ async function loadUserData() {
 
   // Load profile
   const { data: profile } = await queryResult(sb
-    .from('profiles').select('username, is_admin, bio, avatar_url').eq('id', uid).single());
+    .from('profiles').select('username, is_admin, bio, avatar_url, wishlist_is_public').eq('id', uid).single());
   state.username = profile?.username || state.user.user_metadata?.username || 'Reader';
   state.isAdmin = !!profile?.is_admin;
   state.bio = profile?.bio || '';
   state.avatarUrl = profile?.avatar_url || '';
+  state.wishlistIsPublic = profile?.wishlist_is_public !== false;
+
+  const [readsResult, ratingsResult, favoritesResult, wishlistResult] = await Promise.allSettled([
+    queryResult(sb.from('read_books').select('book_key, title, author, cover_url, year, date_read').eq('user_id', uid)),
+    queryResult(sb.from('ratings').select('book_key, rating').eq('user_id', uid)),
+    queryResult(sb.from('favorites').select('book_key, title, author, cover_url, position').eq('user_id', uid).order('position')),
+    queryResult(sb.from('wishlist').select('book_key, title, author, cover_url, year, date_added').eq('user_id', uid)),
+  ]);
+  const reads = readsResult.status === 'fulfilled' ? readsResult.value.data : [];
+  const rats = ratingsResult.status === 'fulfilled' ? ratingsResult.value.data : [];
+  const favs = favoritesResult.status === 'fulfilled' ? favoritesResult.value.data : [];
+  const wish = wishlistResult.status === 'fulfilled' ? wishlistResult.value.data : [];
+  if ([readsResult, ratingsResult, favoritesResult, wishlistResult].some(result => result.status === 'rejected')) {
+    showToast('Some library data could not be refreshed. Please try again.', 'error');
+  }
 
   // Load read books
-  const { data: reads } = await queryResult(sb
-    .from('read_books').select('*').eq('user_id', uid));
   state.readBooks = {};
   (reads || []).forEach(r => {
     state.readBooks[r.book_key] = {
@@ -241,33 +297,21 @@ async function loadUserData() {
     };
   });
 
-  // Load ratings
-  const { data: rats } = await queryResult(sb
-    .from('ratings').select('*').eq('user_id', uid));
   state.ratings = {};
   (rats || []).forEach(r => { state.ratings[r.book_key] = r.rating; });
 
-  // Load favorites
-  const { data: favs } = await queryResult(sb
-    .from('favorites').select('*').eq('user_id', uid).order('position'));
   state.favorites = (favs || []).map(f => ({
     key: f.book_key, title: f.title, author: f.author, coverUrl: f.cover_url,
   }));
 
   // Load wishlist (read later)
-  try {
-    const { data: wish } = await queryResult(sb
-      .from('wishlist').select('*').eq('user_id', uid));
-    state.wishlist = {};
-    (wish || []).forEach(w => {
-      state.wishlist[w.book_key] = {
-        key: w.book_key, title: w.title, author: w.author,
-        coverUrl: w.cover_url, year: w.year, dateAdded: w.date_added,
-      };
-    });
-  } catch (e) {
-    state.wishlist = {};
-  }
+  state.wishlist = {};
+  (wish || []).forEach(w => {
+    state.wishlist[w.book_key] = {
+      key: w.book_key, title: w.title, author: w.author,
+      coverUrl: w.cover_url, year: w.year, dateAdded: w.date_added,
+    };
+  });
 }
 
 // Persist guest data locally. Signed-in actions save through Supabase.
@@ -298,8 +342,17 @@ function requireAuth(actionName) {
 // Curated lists have is_curated=true and user_id=NULL
 // User lists have is_curated=false and user_id set
 const listsCache = {}; // keyed by list id
+let listsCacheLoadedAt = 0;
+let listsCacheRequest = null;
 
 async function loadAllLists() {
+  if (Date.now() - listsCacheLoadedAt < 60_000 && Object.keys(listsCache).length) return listsCache;
+  if (listsCacheRequest) return listsCacheRequest;
+  listsCacheRequest = loadAllListsFromServer().finally(() => { listsCacheRequest = null; });
+  return listsCacheRequest;
+}
+
+async function loadAllListsFromServer() {
   if (!sb) return {};
   try {
     // Load all lists with their books in one query using a join
@@ -327,9 +380,10 @@ async function loadAllLists() {
         books,
       };
     }
+    listsCacheLoadedAt = Date.now();
     return listsCache;
   } catch (e) {
-    return {};
+    throw new Error('Lists could not be loaded.');
   }
 }
 
@@ -384,6 +438,7 @@ async function createUserList(title, description, books) {
     user_id: state.user.id,
     books,
   };
+  listsCacheLoadedAt = Date.now();
 
   return id;
 }
@@ -394,6 +449,7 @@ async function deleteUserList(listId) {
   if (!list || list.is_curated || list.user_id !== state.user.id) return;
   if (!await saveMutation(queryResult(sb.from('lists').delete().eq('id', listId)))) return false;
   delete listsCache[listId];
+  listsCacheLoadedAt = Date.now();
   return true;
 }
 
@@ -449,10 +505,31 @@ function navigate(page, params = {}) {
     loadBlindDatePage();
   }
 
-  if (!params.fromHistory) {
-    const path = '/';
-    if (location.pathname !== path) history.pushState({ page, game: params.game || null }, '', path);
+  if (!params.fromHistory && page !== 'book') {
+    const route = new URLSearchParams({ page });
+    ['listId', 'userId', 'query', 'genre'].forEach(key => {
+      if (params[key]) route.set(key, params[key]);
+    });
+    const hash = `#${route.toString()}`;
+    if (location.hash !== hash) history.pushState({ page, params }, '', hash);
   }
+}
+
+function routeFromLocation() {
+  const route = new URLSearchParams(location.hash.slice(1));
+  const page = route.get('page');
+  const allowedPages = new Set(['home', 'search', 'lists', 'list-detail', 'profile', 'user', 'wishlist', 'blind-date']);
+  if (!allowedPages.has(page)) return { page: 'home', params: {} };
+  return {
+    page,
+    params: {
+      listId: route.get('listId') || undefined,
+      userId: route.get('userId') || undefined,
+      query: route.get('query') || undefined,
+      genre: route.get('genre') || undefined,
+      fromHistory: true,
+    },
+  };
 }
 
 // ─── HOME PAGE ────────────────────────────────────────────────────────────
@@ -921,7 +998,13 @@ async function loadListsPreviews() {
     popularContainer.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--text-muted)">Loading lists…</div>`;
   }
 
-  await loadAllLists();
+  try {
+    await loadAllLists();
+  } catch (error) {
+    popularContainer.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--accent-red)">Lists could not be loaded. <button class="link-btn" id="retry-lists-btn">Try again</button></div>';
+    popularContainer.querySelector('#retry-lists-btn')?.addEventListener('click', () => loadListsPreviews());
+    return;
+  }
 
   const allLists = Object.values(listsCache);
   const curated = allLists.filter(l => l.is_curated);
@@ -1027,9 +1110,9 @@ async function renderListPreviewCovers(previewEl, books, showMissing = false) {
 async function loadListPreviewCovers() {
   const allLists = Object.values(listsCache).length ? Object.values(listsCache) : CURATED_LIST_IDS.map(id => ({id, ...(CURATED_LISTS_OFFLINE[id] || {})}));
 
-  for (const list of allLists) {
+  await Promise.all(allLists.map(async list => {
     const previewEl = document.getElementById(`${list.id}-preview`);
-    if (!previewEl || previewEl.dataset.loaded) continue;
+    if (!previewEl || previewEl.dataset.loaded) return;
     previewEl.dataset.loaded = '1';
 
     // Load books if not already loaded
@@ -1037,10 +1120,10 @@ async function loadListPreviewCovers() {
     if (!books?.length) {
       books = await loadListBooks(list.id);
     }
-    if (!books?.length) continue;
+    if (!books?.length) return;
 
     await renderListPreviewCovers(previewEl, books, true);
-  }
+  }));
 }
 
 function openList(listId) {
@@ -1100,6 +1183,7 @@ async function loadListDetail(listId) {
           </div>`;
         }).join('')}
       </div>
+      <button class="btn btn-secondary" id="list-load-more" type="button" style="display:none;margin:28px auto 0">Load more books</button>
     </div>
   `;
 
@@ -1107,14 +1191,25 @@ async function loadListDetail(listId) {
 }
 
 async function loadListCovers(books) {
-  const batchSize = 8;
-  for (let i = 0; i < books.length; i += batchSize) {
-    const batch = books.slice(i, i + batchSize);
+  const batchSize = 12;
+  let nextIndex = 0;
+  const loadMore = document.getElementById('list-load-more');
+
+  async function loadBatch() {
+    const start = nextIndex;
+    const batch = books.slice(start, start + batchSize);
+    if (!batch.length) return;
+    nextIndex += batch.length;
+    if (loadMore) {
+      loadMore.style.display = nextIndex < books.length ? '' : 'none';
+      loadMore.disabled = true;
+      loadMore.textContent = 'Loading…';
+    }
     const results = await Promise.allSettled(
       batch.map(b => searchBooksForList(b.title, b.author))
     );
     results.forEach((r, j) => {
-      const idx = i + j;
+      const idx = start + j;
       const el = document.getElementById(`list-cover-${idx}`);
       if (!el) return;
       if (r.status === 'fulfilled' && r.value) {
@@ -1146,7 +1241,14 @@ async function loadListCovers(books) {
         }
       }
     });
+    if (loadMore) {
+      loadMore.disabled = false;
+      loadMore.textContent = 'Load more books';
+    }
   }
+
+  loadMore?.addEventListener('click', loadBatch);
+  await loadBatch();
 }
 
 // ─── BOOK DETAIL ───────────────────────────────────────────────────────────
@@ -1543,7 +1645,14 @@ function bindAdminCoverActions(book) {
 async function loadAndRenderReviews(book) {
   const container = document.getElementById('review-list');
   if (!container) return;
-  const reviews = await getBookReviews(book.key);
+  let reviews;
+  try {
+    reviews = await getBookReviews(book.key);
+  } catch (error) {
+    container.innerHTML = '<p style="color:var(--accent-red);font-size:13px">Reviews could not be loaded. <button class="link-btn" id="retry-reviews-btn">Try again</button></p>';
+    container.querySelector('#retry-reviews-btn')?.addEventListener('click', () => loadAndRenderReviews(book));
+    return;
+  }
   if (!reviews.length) {
     container.innerHTML = '<p style="color:var(--text-muted);font-style:italic;font-size:13px">No reviews yet. Be the first to share your thoughts!</p>';
     return;
@@ -1572,6 +1681,7 @@ async function loadAndRenderReviews(book) {
 
   container.querySelectorAll('.review-delete-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
+      if (!confirm('Delete this review? This cannot be undone.')) return;
       if (!await deleteReview(btn.dataset.reviewId)) return;
       showToast('Review deleted');
       loadAndRenderReviews(book);
@@ -1864,7 +1974,7 @@ function loadCollectionPage({ title, books, backPage, backParams = {} }) {
 async function loadUserProfile(userId) {
   if (!sb) return;
 
-  const { data: profile } = await queryResult(sb.from('profiles').select('username, bio, avatar_url').eq('id', userId).single());
+  const { data: profile } = await queryResult(sb.from('profiles').select('username, bio, avatar_url, wishlist_is_public').eq('id', userId).single());
   if (!profile) return;
 
   // Header
@@ -1885,17 +1995,22 @@ async function loadUserProfile(userId) {
     { data: readsData },
     { data: ratingsData },
     { data: listsData },
+    { data: wishlistData },
   ] = await Promise.all([
     queryResult(sb.from('favorites').select('book_key, title, author, cover_url, position').eq('user_id', userId)),
     queryResult(sb.from('read_books').select('book_key, title, author, cover_url, year, date_read').eq('user_id', userId)),
     queryResult(sb.from('ratings').select('book_key, rating, book_title, book_author, cover_url').eq('user_id', userId).gt('rating', 0)),
     queryResult(sb.from('lists').select('id, title, description').eq('user_id', userId).eq('is_curated', false)),
+    profile.wishlist_is_public
+      ? queryResult(sb.from('wishlist').select('book_key, title, author, cover_url, year, date_added').eq('user_id', userId).order('date_added', { ascending: false }))
+      : Promise.resolve({ data: [] }),
   ]);
 
   const favs    = (favsData    || []).sort((a, b) => (a.position ?? 99) - (b.position ?? 99));
   const reads   = readsData   || [];
   const ratings = ratingsData || [];
   const lists   = listsData   || [];
+  const wishlist = wishlistData || [];
 
   // Stats
   document.getElementById('user-stat-read').textContent  = reads.length;
@@ -1981,7 +2096,25 @@ async function loadUserProfile(userId) {
     });
   }
 
+  const wishlistSection = document.getElementById('user-wishlist-section');
+  const wishlistList = document.getElementById('user-wishlist-list');
+  if (wishlistSection && wishlistList) {
+    wishlistSection.style.display = profile.wishlist_is_public ? '' : 'none';
+    if (profile.wishlist_is_public) {
+      wishlistList.innerHTML = wishlist.length
+        ? wishlist.map(item => collectionItemHTML({ key: item.book_key, title: item.title, author: item.author, coverUrl: item.cover_url, dateRead: item.date_added })).join('')
+        : '<p style="color:var(--text-muted);font-style:italic;font-size:13px">Nothing saved yet.</p>';
+      wishlistList.querySelectorAll('.collection-item').forEach((el, i) => {
+        el.addEventListener('click', () => {
+          const item = wishlist[i];
+          if (item) openBook({ key: item.book_key, title: item.title, author: item.author, coverUrl: item.cover_url, year: item.year || '' });
+        });
+      });
+    }
+  }
+
   document.getElementById('user-back-btn')?.addEventListener('click', () => navigate('profile'));
+  document.getElementById('user-share-btn')?.addEventListener('click', () => copyCurrentLink('Profile link'));
 }
 
 // ─── PROFILE ──────────────────────────────────────────────────────────────
@@ -2000,6 +2133,8 @@ function loadProfilePage() {
   document.getElementById('stat-favs').textContent = favCount;
   document.getElementById('stat-wishlist').textContent = wishCount;
   document.getElementById('profile-username').textContent = state.username;
+  const wishlistVisibilityInput = document.getElementById('wishlist-public-input');
+  if (wishlistVisibilityInput) wishlistVisibilityInput.checked = state.wishlistIsPublic;
 
   // Stat click → collection page
   document.getElementById('stat-item-read')?.addEventListener('click', () =>
@@ -2061,7 +2196,13 @@ async function renderProfileLists() {
   if (!section || !grid || !state.user) return;
 
   // Find user's lists from cache
-  await loadAllLists();
+  try {
+    await loadAllLists();
+  } catch (error) {
+    section.style.display = '';
+    grid.innerHTML = '<p style="color:var(--accent-red);font-size:13px">Your lists could not be loaded. Please try again.</p>';
+    return;
+  }
   const myLists = Object.values(listsCache).filter(l => l.user_id === state.user.id);
   if (!myLists.length) { section.style.display = 'none'; return; }
 
@@ -2150,10 +2291,19 @@ function renderReadList() {
   if (!el) return;
   const keys = Object.keys(state.readBooks);
   if (!keys.length) {
-    el.innerHTML = `<div class="empty-state"><svg width="48" height="48" fill="none" viewBox="0 0 24 24"><path d="M4 19V6a2 2 0 012-2h12a2 2 0 012 2v13" stroke="currentColor" stroke-width="1.5"/></svg><h3>No books read yet</h3><p>Search for a book and mark it as read</p></div>`;
+    el.innerHTML = `<div class="empty-state"><svg width="48" height="48" fill="none" viewBox="0 0 24 24"><path d="M4 19V6a2 2 0 012-2h12a2 2 0 012 2v13" stroke="currentColor" stroke-width="1.5"/></svg><h3>Start your reading history</h3><p>Find a book, then mark it as read to make this shelf yours.</p><button class="btn btn-primary" id="start-reading-btn" type="button">Find a book</button></div>`;
+    el.querySelector('#start-reading-btn')?.addEventListener('click', () => navigate('search'));
     return;
   }
-  el.innerHTML = keys.map(key => {
+  const sort = document.getElementById('read-sort')?.value || 'recent';
+  const sortedKeys = [...keys].sort((a, b) => {
+    const first = state.readBooks[a];
+    const second = state.readBooks[b];
+    if (sort === 'title') return (first.title || '').localeCompare(second.title || '');
+    if (sort === 'rating') return (state.ratings[second.key] || 0) - (state.ratings[first.key] || 0);
+    return new Date(second.dateRead || 0) - new Date(first.dateRead || 0);
+  });
+  el.innerHTML = sortedKeys.map(key => {
     const b = state.readBooks[key];
     const rating = state.ratings[key] || 0;
     const cover = coverUrl(b.coverUrl);
@@ -2294,11 +2444,11 @@ function openRatingModal(book) {
   document.getElementById('modal-book-title').textContent = book.title;
   const cur = state.ratings[book.key] || 0;
   document.querySelectorAll('.modal-star').forEach(s => s.classList.toggle('filled', parseInt(s.dataset.val) <= cur));
-  document.getElementById('rating-modal').classList.add('open');
+  openModal('rating-modal', '.modal-star');
 }
 
 function closeRatingModal() {
-  document.getElementById('rating-modal').classList.remove('open');
+  closeModal('rating-modal');
   state.pendingRatingBook = null;
 }
 
@@ -2343,6 +2493,22 @@ function escHtml(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
 
+async function copyCurrentLink(label = 'Link') {
+  const url = location.href;
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast(`${label} copied`);
+  } catch {
+    const input = document.createElement('input');
+    input.value = url;
+    document.body.appendChild(input);
+    input.select();
+    document.execCommand('copy');
+    input.remove();
+    showToast(`${label} copied`);
+  }
+}
+
 // ─── CREATE LIST MODAL ────────────────────────────────────────────────────
 let createListBooks = []; // books added to the new list
 let createListSearchResults = [];
@@ -2353,13 +2519,13 @@ function openCreateListModal() {
   if (!requireAuth('create lists')) return;
   const modal = document.getElementById('create-list-modal');
   renderCreateListBooks();
-  modal.classList.add('open');
+  openModal('create-list-modal', '#create-list-title');
 }
 
 function closeCreateListModal() {
   clearTimeout(createListSearchTimer);
   createListSearchRequest++;
-  document.getElementById('create-list-modal').classList.remove('open');
+  closeModal('create-list-modal');
 }
 
 function resetCreateListDraft() {
@@ -2498,11 +2664,11 @@ function openAuthModal(mode = 'signup') {
     usernameField.style.display = 'none';
   }
   errorEl.style.display = 'none';
-  modal.classList.add('open');
+  openModal('auth-modal', mode === 'signup' ? '#auth-username' : '#auth-email');
 }
 
 function closeAuthModal() {
-  document.getElementById('auth-modal').classList.remove('open');
+  closeModal('auth-modal');
   document.getElementById('auth-error').style.display = 'none';
 }
 
@@ -2528,16 +2694,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('logo-link')?.addEventListener('click', e => { e.preventDefault(); navigate('home'); });
   document.getElementById('profile-nav-link')?.addEventListener('click', e => { e.preventDefault(); navigate('profile'); });
+  document.getElementById('wishlist-tile')?.addEventListener('click', () => navigate('wishlist'));
 
   // Header auth buttons
   document.getElementById('header-login-btn')?.addEventListener('click', () => openAuthModal('login'));
   document.getElementById('header-signup-btn')?.addEventListener('click', () => openAuthModal('signup'));
   document.getElementById('header-logout-btn')?.addEventListener('click', logOut);
   document.getElementById('profile-logout-btn')?.addEventListener('click', logOut);
+  document.getElementById('read-sort')?.addEventListener('change', renderReadList);
 
   // Auth modal
   document.getElementById('auth-modal-close')?.addEventListener('click', closeAuthModal);
   document.getElementById('auth-modal')?.addEventListener('click', e => { if (e.target === e.currentTarget) closeAuthModal(); });
+  document.addEventListener('keydown', trapModalFocus);
 
   document.getElementById('auth-switch-link')?.addEventListener('click', e => {
     e.preventDefault();
@@ -2563,7 +2732,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         closeAuthModal();
         // Show confirmation modal
         document.getElementById('confirm-email-addr').textContent = email;
-        document.getElementById('confirm-modal').classList.add('open');
+        openModal('confirm-modal', '#confirm-ok-btn');
       } else {
         await logIn(email, password);
         closeAuthModal();
@@ -2588,7 +2757,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   document.getElementById('confirm-ok-btn')?.addEventListener('click', async () => {
-    document.getElementById('confirm-modal').classList.remove('open');
+    closeModal('confirm-modal');
   });
 
   // Header search
@@ -2657,22 +2826,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     const input = document.getElementById('username-input');
     const bioInput = document.getElementById('bio-input');
     const avatarInput = document.getElementById('avatar-url-input');
+    const wishlistInput = document.getElementById('wishlist-public-input');
     form.style.display = form.style.display === 'none' ? 'flex' : 'none';
     if (input) { input.value = state.username; input.focus(); }
     if (bioInput) bioInput.value = state.bio || '';
     if (avatarInput) avatarInput.value = state.avatarUrl || '';
+    if (wishlistInput) wishlistInput.checked = state.wishlistIsPublic;
   });
   document.getElementById('save-username-btn')?.addEventListener('click', async () => {
     const val = document.getElementById('username-input').value.trim();
     const bioVal = document.getElementById('bio-input')?.value.trim() || '';
     const avatarVal = document.getElementById('avatar-url-input')?.value.trim() || '';
+    const wishlistIsPublic = document.getElementById('wishlist-public-input')?.checked !== false;
     if (val) {
       if (state.user) {
-        if (!await saveMutation(queryResult(sb.from('profiles').update({ username: val, bio: bioVal, avatar_url: avatarVal || null }).eq('id', state.user.id)))) return;
+        if (!await saveMutation(queryResult(sb.from('profiles').update({ username: val, bio: bioVal, avatar_url: avatarVal || null, wishlist_is_public: wishlistIsPublic }).eq('id', state.user.id)))) return;
       }
       state.username = val;
       state.bio = bioVal;
       state.avatarUrl = avatarVal;
+      state.wishlistIsPublic = wishlistIsPublic;
       saveLocalGuestData();
       document.getElementById('profile-username').textContent = val;
       // Update avatar
@@ -2716,7 +2889,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   window.addEventListener('popstate', () => {
-    navigate('home', { fromHistory: true });
+    const route = routeFromLocation();
+    navigate(route.page, route.params);
   });
-  navigate('home', { fromHistory: true });
+  const initialRoute = routeFromLocation();
+  navigate(initialRoute.page, initialRoute.params);
 });

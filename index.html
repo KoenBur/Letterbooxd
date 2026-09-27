@@ -7,6 +7,8 @@
   <meta name="description" content="Keep a personal record of the books you've read and discover what to read next with Letterbooxd.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preconnect" href="https://ycejifwmvlpjewbsbrub.supabase.co" crossorigin>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="stylesheet" href="css/style.css?v=cleanup-20260927">
   <link rel="stylesheet" href="css/night-library.css?v=cleanup-20260927">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='28'>📚</text></svg>">
@@ -25,6 +27,7 @@
       <a href="#" data-page="search" class="mobile-only">Search</a>
     </nav>
     <div class="header-search">
+      <label class="sr-only" for="header-search">Search books</label>
       <input type="text" id="header-search" placeholder="Search books…" autocomplete="off">
     </div>
     <div class="header-auth" id="header-auth">
@@ -216,6 +219,7 @@
       <button class="back-btn" onclick="navigate('home')">← Back</button>
       <h2>Find a book</h2>
       <div class="search-bar">
+        <label class="sr-only" for="main-search-input">Search by title, author, or ISBN</label>
         <input type="text" id="main-search-input" placeholder="Title, author, ISBN…" autocomplete="off">
         <button id="search-btn">Search</button>
       </div>
@@ -276,9 +280,16 @@
         <button class="btn btn-secondary btn-sm" id="edit-username-btn">Edit profile</button>
         <button class="btn btn-secondary btn-sm" id="profile-logout-btn" style="color:var(--text-muted)">Log out</button>
         <div class="edit-profile-form" id="edit-name-form" style="display:none">
+          <label class="sr-only" for="username-input">Username</label>
           <input type="text" id="username-input" placeholder="Your name" maxlength="30">
+          <label class="sr-only" for="bio-input">Short bio</label>
           <textarea id="bio-input" placeholder="Short bio (optional)" maxlength="256" rows="2" style="resize:vertical;min-height:40px"></textarea>
+          <label class="sr-only" for="avatar-url-input">Profile picture URL</label>
           <input type="url" id="avatar-url-input" placeholder="Profile picture URL (optional)" maxlength="500" style="width:100%">
+          <label class="profile-visibility-setting" for="wishlist-public-input">
+            <input type="checkbox" id="wishlist-public-input" checked>
+            <span>Show my Read Later list on my public profile</span>
+          </label>
           <button class="btn btn-primary btn-sm" id="save-username-btn">Save</button>
         </div>
       </div>
@@ -299,7 +310,7 @@
         <div id="profile-lists-grid" class="lists-grid"></div>
       </section>
       <section>
-        <div class="section-header"><h2>Read</h2></div>
+        <div class="section-header"><h2>Read</h2><label class="sr-only" for="read-sort">Sort read books</label><select id="read-sort"><option value="recent">Recently read</option><option value="title">Title</option><option value="rating">Rating</option></select></div>
         <div id="read-books-list"></div>
       </section>
     </div>
@@ -307,6 +318,7 @@
       <div class="sidebar-section">
         <h4 class="sidebar-heading">Friends <span id="friends-count" style="color:var(--text-muted);font-weight:400"></span></h4>
         <div class="friend-search-wrap">
+          <label class="sr-only" for="friend-search-input">Search users</label>
           <input type="text" id="friend-search-input" placeholder="Search users…" autocomplete="off">
           <div id="friend-search-results" class="friend-search-results"></div>
         </div>
@@ -314,16 +326,16 @@
           <p style="color:var(--text-muted);font-size:13px;font-style:italic">No friends yet. Search above to add some!</p>
         </div>
       </div>
-      <div class="sidebar-section wishlist-tile" id="wishlist-tile" onclick="navigate('wishlist')" style="margin-top:16px;cursor:pointer">
+      <button class="sidebar-section wishlist-tile" id="wishlist-tile" type="button" style="margin-top:16px">
         <div style="display:flex;align-items:center;gap:10px">
           <div class="wishlist-tile-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="1.5"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg></div>
           <div>
-            <h4 class="sidebar-heading" style="margin-bottom:2px">Read Later</h4>
-            <p style="color:var(--text-muted);font-size:12px;margin:0"><span id="wishlist-tile-count">0</span> books saved</p>
+            <span class="sidebar-heading" style="display:block;margin-bottom:2px">Read Later</span>
+            <span style="color:var(--text-muted);font-size:12px"><span id="wishlist-tile-count">0</span> books saved</span>
           </div>
           <span style="margin-left:auto;color:var(--text-muted);font-size:18px">›</span>
         </div>
-      </div>
+      </button>
     </aside>
   </main>
 </div>
@@ -367,6 +379,7 @@
         </div>
       </div>
       <div style="margin-left:auto">
+        <button class="btn btn-secondary btn-sm" id="user-share-btn" type="button">Copy profile link</button>
         <button class="back-btn" id="user-back-btn">← Back</button>
       </div>
     </div>
@@ -383,6 +396,10 @@
     <section id="user-lists-section" style="margin-bottom:32px;display:none">
       <div class="section-header"><h2>Lists</h2></div>
       <div class="lists-grid" id="user-lists-grid"></div>
+    </section>
+    <section id="user-wishlist-section" style="margin-bottom:32px;display:none">
+      <div class="section-header"><h2>Read Later</h2></div>
+      <div id="user-wishlist-list"></div>
     </section>
   </main>
 </div>
@@ -401,18 +418,18 @@
 </div>
 
 <!-- ─── AUTH MODAL ──────────────────────────────────────────────────────── -->
-<div class="modal-overlay" id="auth-modal">
-  <div class="modal auth-modal">
+<div class="modal-overlay" id="auth-modal" aria-hidden="true">
+  <div class="modal auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title" tabindex="-1">
     <h3 id="auth-modal-title">Sign up</h3>
     <p style="color:var(--text-muted);font-size:13px;margin-bottom:20px" id="auth-modal-subtitle">Create an account to save your reading history across devices.</p>
     <div class="auth-form">
       <div id="auth-username-field">
-        <label class="auth-label">Username</label>
+        <label class="auth-label" for="auth-username">Username</label>
         <input type="text" id="auth-username" placeholder="Your name" maxlength="30" autocomplete="username">
       </div>
-      <label class="auth-label">Email</label>
+      <label class="auth-label" for="auth-email">Email</label>
       <input type="email" id="auth-email" placeholder="you@example.com" autocomplete="email">
-      <label class="auth-label">Password</label>
+      <label class="auth-label" for="auth-password">Password</label>
       <input type="password" id="auth-password" placeholder="At least 6 characters" minlength="6" autocomplete="current-password">
       <div id="auth-error" class="auth-error" style="display:none"></div>
       <button class="btn btn-primary" id="auth-submit-btn" style="width:100%;margin-top:8px">Sign up</button>
@@ -421,57 +438,57 @@
         <a href="#" id="auth-switch-link">Log in</a>
       </div>
     </div>
-    <button class="modal-close-x" id="auth-modal-close">✕</button>
+    <button class="modal-close-x" id="auth-modal-close" aria-label="Close sign-up dialog">✕</button>
   </div>
 </div>
 
 <!-- ─── CONFIRM EMAIL PAGE ─────────────────────────────────────────────── -->
-<div class="modal-overlay" id="confirm-modal">
-  <div class="modal" style="text-align:center">
+<div class="modal-overlay" id="confirm-modal" aria-hidden="true">
+  <div class="modal" style="text-align:center" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" tabindex="-1">
     <svg width="48" height="48" fill="none" viewBox="0 0 24 24" style="margin-bottom:16px"><path d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round"/></svg>
-    <h3>Check your email</h3>
+    <h3 id="confirm-modal-title">Check your email</h3>
     <p style="color:var(--text-muted);font-size:14px;margin-top:8px;line-height:1.6">We sent a confirmation link to <strong id="confirm-email-addr"></strong>. Click it to activate your account.</p>
     <button class="btn btn-secondary" id="confirm-ok-btn" style="margin-top:20px">Got it</button>
   </div>
 </div>
 
 <!-- ─── CREATE LIST MODAL ────────────────────────────────────────────────── -->
-<div class="modal-overlay" id="create-list-modal">
-  <div class="modal auth-modal" style="max-width:520px">
-    <h3>Create a List</h3>
+<div class="modal-overlay" id="create-list-modal" aria-hidden="true">
+  <div class="modal auth-modal" style="max-width:520px" role="dialog" aria-modal="true" aria-labelledby="create-list-modal-title" tabindex="-1">
+    <h3 id="create-list-modal-title">Create a List</h3>
     <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Build your own reading list and share it with the community.</p>
     <div class="auth-form">
-      <label class="auth-label">List Title</label>
+      <label class="auth-label" for="create-list-title">List Title</label>
       <input type="text" id="create-list-title" placeholder="e.g. My Favourite Sci-Fi" maxlength="100" autocomplete="off">
-      <label class="auth-label">Description (optional)</label>
+      <label class="auth-label" for="create-list-desc">Description (optional)</label>
       <input type="text" id="create-list-desc" placeholder="What's this list about?" maxlength="300" autocomplete="off">
-      <label class="auth-label">Add Books</label>
+      <label class="auth-label" for="create-list-search">Add Books</label>
       <input type="text" id="create-list-search" placeholder="Search by title or author…" autocomplete="off">
       <div id="create-list-search-results" class="create-list-search-results"></div>
       <div id="create-list-books" class="create-list-books"></div>
       <button class="btn btn-primary" id="create-list-submit" style="width:100%;margin-top:8px">Create List</button>
     </div>
-    <button class="modal-close-x" id="create-list-modal-close">✕</button>
+    <button class="modal-close-x" id="create-list-modal-close" aria-label="Close create-list dialog">✕</button>
   </div>
 </div>
 
 <!-- ─── RATING MODAL ───────────────────────────────────────────────────── -->
-<div class="modal-overlay" id="rating-modal">
-  <div class="modal">
+<div class="modal-overlay" id="rating-modal" aria-hidden="true">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-book-title" tabindex="-1">
     <h3 id="modal-book-title">Rate this book</h3>
     <div class="modal-stars">
-      <span class="modal-star" data-val="1">★</span>
-      <span class="modal-star" data-val="2">★</span>
-      <span class="modal-star" data-val="3">★</span>
-      <span class="modal-star" data-val="4">★</span>
-      <span class="modal-star" data-val="5">★</span>
+      <button class="modal-star" type="button" data-val="1" aria-label="Rate 1 out of 5">★</button>
+      <button class="modal-star" type="button" data-val="2" aria-label="Rate 2 out of 5">★</button>
+      <button class="modal-star" type="button" data-val="3" aria-label="Rate 3 out of 5">★</button>
+      <button class="modal-star" type="button" data-val="4" aria-label="Rate 4 out of 5">★</button>
+      <button class="modal-star" type="button" data-val="5" aria-label="Rate 5 out of 5">★</button>
     </div>
-    <div style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Click a star to rate, click again to remove.</div>
+    <div style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Choose a star to rate. Choose the same star again to remove.</div>
     <div class="modal-actions"><button class="modal-cancel" id="modal-cancel">Cancel</button></div>
   </div>
 </div>
 
-<div class="toast-container" id="toast-container"></div>
+<div class="toast-container" id="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
 <script src="js/curated-lists.js?v=cleanup-20260927"></script>
 <script src="js/catalog.js?v=cleanup-20260927"></script>
 <script src="js/social.js?v=cleanup-20260927"></script>

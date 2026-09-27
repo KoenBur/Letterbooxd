@@ -99,8 +99,15 @@ function bindFriendSearch() {
   input.parentNode.replaceChild(newInput, input);
 
   let debounce;
+  let requestId = 0;
   async function doFriendSearch(q) {
     if (!q) { resultsEl.innerHTML = ''; resultsEl.style.display = 'none'; return; }
+    if (q.length < 2) {
+      resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">Type at least 2 characters.</div>';
+      resultsEl.style.display = 'block';
+      return;
+    }
+    const currentRequest = ++requestId;
     resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">Searching…</div>';
     resultsEl.style.display = 'block';
     let users;
@@ -111,6 +118,7 @@ function bindFriendSearch() {
       resultsEl.style.display = 'block';
       return;
     }
+    if (currentRequest !== requestId) return;
     const friends = await getFriends();
     const friendIds = new Set(friends.map(f => f.id));
     if (!users.length) { resultsEl.innerHTML = '<div class="friend-search-item" style="color:var(--text-muted)">No users found</div>'; resultsEl.style.display = 'block'; return; }
@@ -180,7 +188,7 @@ async function getBookReviews(bookKey) {
       username: profileMap[r.user_id]?.username || 'Anonymous',
       avatar_url: profileMap[r.user_id]?.avatar_url || null,
     }));
-  } catch (e) { return []; }
+  } catch (e) { throw new Error('Reviews could not be loaded.'); }
 }
 
 async function submitReview(bookKey, bookTitle, rating, reviewText) {
