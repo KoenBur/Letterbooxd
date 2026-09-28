@@ -305,6 +305,13 @@
         <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px">Select up to four all-time favourites to show on your profile.</p>
         <div class="favorites-grid" id="favorites-grid"></div>
       </section>
+      <section class="currently-reading-section" aria-labelledby="currently-reading-heading">
+        <div class="section-header">
+          <h2 id="currently-reading-heading">Currently Reading</h2>
+          <div class="currently-reading-actions"><span id="currently-reading-count"></span><button class="text-link" id="currently-reading-more" type="button" style="display:none">View all →</button></div>
+        </div>
+        <div class="currently-reading-grid" id="currently-reading-grid"></div>
+      </section>
       <section id="profile-lists-section" style="display:none">
         <div class="section-header"><h2>My Lists</h2></div>
         <div id="profile-lists-grid" class="lists-grid"></div>
@@ -388,6 +395,10 @@
     <section class="favorites-section" style="margin-bottom:32px">
       <h3><svg width="16" height="16" fill="var(--accent-orange)" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg> Favourite Books</h3>
       <div class="favorites-grid" id="user-favorites-grid"></div>
+    </section>
+    <section class="currently-reading-section" id="user-currently-reading-section" style="margin-bottom:32px">
+      <div class="section-header"><h2>Currently Reading</h2></div>
+      <div class="currently-reading-grid" id="user-currently-reading-grid"></div>
     </section>
     <section style="margin-bottom:32px">
       <div class="section-header"><h2>Books Read</h2></div>

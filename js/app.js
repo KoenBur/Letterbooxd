@@ -82,6 +82,7 @@ const state = {
   ratings: {},
   favorites: [],
   wishlist: {},
+  currentlyReading: {},
   currentPage: 'home',
   currentBook: null,
   searchResults: [],
@@ -103,6 +104,7 @@ function loadLocalGuestData() {
   state.ratings = JSON.parse(localStorage.getItem('lbx_ratings') || '{}');
   state.favorites = JSON.parse(localStorage.getItem('lbx_favorites') || '[]');
   state.wishlist = JSON.parse(localStorage.getItem('lbx_wishlist') || '{}');
+  state.currentlyReading = JSON.parse(localStorage.getItem('lbx_currently_reading') || '{}');
 }
 
 async function initAuth() {
@@ -135,6 +137,7 @@ async function initAuth() {
       state.ratings = {};
       state.favorites = [];
       state.wishlist = {};
+      state.currentlyReading = {};
       state.username = 'Reader';
       state.avatarUrl = '';
     }
@@ -209,6 +212,7 @@ async function logOut() {
   state.ratings = {};
   state.favorites = [];
   state.wishlist = {};
+  state.currentlyReading = {};
   state.username = 'Reader';
   state.avatarUrl = '';
   updateAuthUI();
@@ -274,17 +278,19 @@ async function loadUserData() {
   state.avatarUrl = profile?.avatar_url || '';
   state.wishlistIsPublic = profile?.wishlist_is_public !== false;
 
-  const [readsResult, ratingsResult, favoritesResult, wishlistResult] = await Promise.allSettled([
+  const [readsResult, ratingsResult, favoritesResult, wishlistResult, currentlyReadingResult] = await Promise.allSettled([
     queryResult(sb.from('read_books').select('book_key, title, author, cover_url, year, date_read').eq('user_id', uid)),
     queryResult(sb.from('ratings').select('book_key, rating').eq('user_id', uid)),
     queryResult(sb.from('favorites').select('book_key, title, author, cover_url, position').eq('user_id', uid).order('position')),
     queryResult(sb.from('wishlist').select('book_key, title, author, cover_url, year, date_added').eq('user_id', uid)),
+    queryResult(sb.from('currently_reading').select('book_key, title, author, cover_url, year, started_at').eq('user_id', uid).order('started_at', { ascending: false })),
   ]);
   const reads = readsResult.status === 'fulfilled' ? readsResult.value.data : [];
   const rats = ratingsResult.status === 'fulfilled' ? ratingsResult.value.data : [];
   const favs = favoritesResult.status === 'fulfilled' ? favoritesResult.value.data : [];
   const wish = wishlistResult.status === 'fulfilled' ? wishlistResult.value.data : [];
-  if ([readsResult, ratingsResult, favoritesResult, wishlistResult].some(result => result.status === 'rejected')) {
+  const currentlyReading = currentlyReadingResult.status === 'fulfilled' ? currentlyReadingResult.value.data : [];
+  if ([readsResult, ratingsResult, favoritesResult, wishlistResult, currentlyReadingResult].some(result => result.status === 'rejected')) {
     showToast('Some library data could not be refreshed. Please try again.', 'error');
   }
 
@@ -312,6 +318,14 @@ async function loadUserData() {
       coverUrl: w.cover_url, year: w.year, dateAdded: w.date_added,
     };
   });
+
+  state.currentlyReading = {};
+  (currentlyReading || []).forEach(item => {
+    state.currentlyReading[item.book_key] = {
+      key: item.book_key, title: item.title, author: item.author,
+      coverUrl: item.cover_url, year: item.year, startedAt: item.started_at,
+    };
+  });
 }
 
 // Persist guest data locally. Signed-in actions save through Supabase.
@@ -326,6 +340,7 @@ async function saveLocalGuestData() {
   localStorage.setItem('lbx_favorites', JSON.stringify(state.favorites));
   localStorage.setItem('lbx_username', state.username);
   localStorage.setItem('lbx_wishlist', JSON.stringify(state.wishlist));
+  localStorage.setItem('lbx_currently_reading', JSON.stringify(state.currentlyReading));
 }
 
 function requireAuth(actionName) {
@@ -911,6 +926,7 @@ function renderShelfBooks(containerId, books) {
 
 function shelfBookHTML(book) {
   const isRead = !!state.readBooks[book.key];
+  const isCurrentlyReading = !!state.currentlyReading[book.key];
   const cover = coverUrl(book.coverUrl);
   return `
     <div class="book-card" data-key="${escHtml(book.key)}">
@@ -934,6 +950,7 @@ function shelfBookHTML(book) {
           </div>
         </div>
         ${isRead ? '<div class="read-badge">✓</div>' : ''}
+        ${isCurrentlyReading ? '<div class="currently-reading-badge">Reading</div>' : ''}
       </div>
       <div class="shelf-book-info">
         <div class="shelf-book-state">${isRead ? 'In your reading log' : 'Open book'}</div>
@@ -1298,6 +1315,7 @@ async function loadBookDetail(book) {
   const rating = state.ratings[book.key] || 0;
   const isFav = state.favorites.some(f => f.key === book.key);
   const isWish = !!state.wishlist[book.key];
+  const isCurrentlyReading = !!state.currentlyReading[book.key];
   const cover = coverUrl(book.coverUrl, 'L');
 
   document.getElementById('book-detail-content').innerHTML = `
@@ -1371,6 +1389,9 @@ async function loadBookDetail(book) {
             </button>
             <button class="detail-action-btn ${isWish ? 'active-wish' : ''}" id="detail-wish-btn">
               <span>🔖</span> ${isWish ? 'Saved' : 'Read Later'}
+            </button>
+            <button class="detail-action-btn ${isCurrentlyReading ? 'active-reading' : ''}" id="detail-reading-btn">
+              <span>◐</span> ${isCurrentlyReading ? 'Currently Reading' : 'Start Reading'}
             </button>
             <div class="detail-rating">
               <span class="detail-rating-label">Rate:</span>
@@ -1524,6 +1545,13 @@ function bindDetailActions(book) {
     const isWish = !!state.wishlist[book.key];
     const btn = document.getElementById('detail-wish-btn');
     if (btn) { btn.className = `detail-action-btn ${isWish ? 'active-wish' : ''}`; btn.innerHTML = `<span>🔖</span> ${isWish ? 'Saved' : 'Read Later'}`; }
+  });
+
+  document.getElementById('detail-reading-btn')?.addEventListener('click', async () => {
+    await toggleCurrentlyReading(book);
+    const isCurrentlyReading = !!state.currentlyReading[book.key];
+    const btn = document.getElementById('detail-reading-btn');
+    if (btn) { btn.className = `detail-action-btn ${isCurrentlyReading ? 'active-reading' : ''}`; btn.innerHTML = `<span>◐</span> ${isCurrentlyReading ? 'Currently Reading' : 'Start Reading'}`; }
   });
 
   const stars = document.querySelectorAll('.detail-star');
@@ -1880,6 +1908,7 @@ function renderBookGrid(containerId, books) {
 
 function bookCardHTML(book) {
   const isRead = !!state.readBooks[book.key];
+  const isCurrentlyReading = !!state.currentlyReading[book.key];
   const rating = state.ratings[book.key] || 0;
   const cover = coverUrl(book.coverUrl);
   const starsHtml = [1,2,3,4,5].map(i => `<span class="star ${i <= rating ? 'filled' : ''}">★</span>`).join('');
@@ -1898,6 +1927,7 @@ function bookCardHTML(book) {
           </div>
         </div>
         ${isRead ? '<div class="read-badge">✓</div>' : ''}
+        ${isCurrentlyReading ? '<div class="currently-reading-badge">Reading</div>' : ''}
       </div>
       <div class="book-info">
         <div class="book-title">${escHtml(book.title)}</div>
@@ -1917,6 +1947,7 @@ function normalizeStoredBook(book) {
     author: book.author || book.book_author || '',
     coverUrl: book.coverUrl || book.cover_url,
     dateRead: book.dateRead || book.date_read || '',
+    startedAt: book.startedAt || book.started_at || '',
   };
 }
 
@@ -1924,7 +1955,7 @@ function collectionItemHTML(book) {
   const cover = coverUrl(book.coverUrl, 'S');
   const rating = book.rating || 0;
   const stars = rating ? '★'.repeat(rating) + '☆'.repeat(5 - rating) : '';
-  const date = book.dateRead || '';
+  const date = book.dateRead || book.startedAt || '';
   return `<div class="collection-item" data-book-key="${escHtml(book.key || '')}">
     ${cover ? `<img class="collection-item-cover" src="${escHtml(cover)}" alt="" loading="lazy" onerror="this.style.background='var(--bg-secondary)';this.removeAttribute('src')">` : '<div class="collection-item-cover"></div>'}
     <div class="collection-item-info">
@@ -1984,6 +2015,7 @@ async function loadUserProfile(userId) {
     { data: ratingsData },
     { data: listsData },
     { data: wishlistData },
+    { data: currentlyReadingData },
   ] = await Promise.all([
     queryResult(sb.from('favorites').select('book_key, title, author, cover_url, position').eq('user_id', userId)),
     queryResult(sb.from('read_books').select('book_key, title, author, cover_url, year, date_read').eq('user_id', userId)),
@@ -1992,6 +2024,7 @@ async function loadUserProfile(userId) {
     profile.wishlist_is_public
       ? queryResult(sb.from('wishlist').select('book_key, title, author, cover_url, year, date_added').eq('user_id', userId).order('date_added', { ascending: false }))
       : Promise.resolve({ data: [] }),
+    queryResult(sb.from('currently_reading').select('book_key, title, author, cover_url, year, started_at').eq('user_id', userId).order('started_at', { ascending: false })),
   ]);
 
   const favs    = (favsData    || []).sort((a, b) => (a.position ?? 99) - (b.position ?? 99));
@@ -1999,6 +2032,7 @@ async function loadUserProfile(userId) {
   const ratings = ratingsData || [];
   const lists   = listsData   || [];
   const wishlist = wishlistData || [];
+  const currentlyReading = currentlyReadingData || [];
 
   // Stats
   document.getElementById('user-stat-read').textContent  = reads.length;
@@ -2053,6 +2087,28 @@ async function loadUserProfile(userId) {
     } else {
       favsGrid.innerHTML = '<p style="color:var(--text-muted);font-size:13px;font-style:italic">No favourites yet.</p>';
     }
+  }
+
+  const currentlyReadingSection = document.getElementById('user-currently-reading-section');
+  const currentlyReadingGrid = document.getElementById('user-currently-reading-grid');
+  if (currentlyReadingSection && currentlyReadingGrid) {
+    currentlyReadingSection.style.display = '';
+    currentlyReadingGrid.innerHTML = currentlyReading.length
+      ? currentlyReading.slice(0, 5).map(item => {
+          const cover = coverUrl(item.cover_url, 'M');
+          return `<button class="currently-reading-book" type="button" data-key="${escHtml(item.book_key)}">
+            <span class="currently-reading-cover">${cover ? `<img src="${cover}" alt="${escHtml(item.title)}" loading="lazy">` : '<span class="currently-reading-cover-placeholder">Book</span>'}</span>
+            <span class="currently-reading-title">${escHtml(item.title)}</span>
+            <span class="currently-reading-author">${escHtml(item.author)}</span>
+          </button>`;
+        }).join('')
+      : '<p class="currently-reading-empty">Nothing in progress right now.</p>';
+    currentlyReadingGrid.querySelectorAll('.currently-reading-book').forEach(button => {
+      button.addEventListener('click', () => {
+        const item = currentlyReading.find(entry => entry.book_key === button.dataset.key);
+        if (item) openBook({ key: item.book_key, title: item.title, author: item.author, coverUrl: item.cover_url, year: item.year });
+      });
+    });
   }
 
   // All reads with relative dates
@@ -2171,6 +2227,7 @@ function loadProfilePage() {
   if (wishTileCount) wishTileCount.textContent = Object.keys(state.wishlist).length;
 
   renderFavorites();
+  renderCurrentlyReading();
   renderReadList();
   renderWishlist();
   renderProfileLists();
@@ -2274,6 +2331,38 @@ async function removeFavorite(index) {
   if (book && await toggleFavorite(book)) renderFavorites();
 }
 
+function renderCurrentlyReading() {
+  const grid = document.getElementById('currently-reading-grid');
+  const count = document.getElementById('currently-reading-count');
+  const more = document.getElementById('currently-reading-more');
+  if (!grid) return;
+  const books = Object.values(state.currentlyReading)
+    .sort((a, b) => new Date(b.startedAt || 0) - new Date(a.startedAt || 0));
+  if (count) count.textContent = books.length ? `${books.length} ${books.length === 1 ? 'book' : 'books'}` : 'No books yet';
+  if (more) {
+    more.style.display = books.length > 5 ? '' : 'none';
+    more.onclick = () => loadCollectionPage({ title: 'Currently Reading', books, backPage: 'profile' });
+  }
+  if (!books.length) {
+    grid.innerHTML = '<p class="currently-reading-empty">Open a book and choose “Start Reading” to put it on this shelf.</p>';
+    return;
+  }
+  grid.innerHTML = books.slice(0, 5).map(book => {
+    const cover = coverUrl(book.coverUrl, 'M');
+    return `<button class="currently-reading-book" type="button" data-key="${escHtml(book.key)}">
+      <span class="currently-reading-cover">${cover ? `<img src="${cover}" alt="${escHtml(book.title)}" loading="lazy">` : '<span class="currently-reading-cover-placeholder">Book</span>'}</span>
+      <span class="currently-reading-title">${escHtml(book.title)}</span>
+      <span class="currently-reading-author">${escHtml(book.author)}</span>
+    </button>`;
+  }).join('');
+  grid.querySelectorAll('.currently-reading-book').forEach(button => {
+    button.addEventListener('click', () => {
+      const book = state.currentlyReading[button.dataset.key];
+      if (book) openBook(book);
+    });
+  });
+}
+
 function renderReadList() {
   const el = document.getElementById('read-books-list');
   if (!el) return;
@@ -2324,8 +2413,37 @@ async function toggleRead(key, title, author, coverUrl, year) {
     }
     if (removing) delete state.readBooks[key];
     else state.readBooks[key] = { key, title, author, coverUrl, year, dateRead };
+    if (!removing && state.currentlyReading[key]) {
+      await toggleCurrentlyReading({ key, title, author, coverUrl, year }, { silent: true });
+    }
     saveLocalGuestData();
     showToast(removing ? `Removed "${title}" from read list` : `Marked "${title}" as read ✓`);
+    return true;
+  });
+}
+
+async function toggleCurrentlyReading(book, { silent = false } = {}) {
+  return runBookMutation('currently-reading:' + book.key, async () => {
+    if (!requireAuth('track what you are reading')) return false;
+    const removing = !!state.currentlyReading[book.key];
+    const startedAt = new Date().toISOString();
+    if (state.user) {
+      const request = removing
+        ? queryResult(sb.from('currently_reading').delete().eq('user_id', state.user.id).eq('book_key', book.key))
+        : queryResult(sb.from('currently_reading').upsert({
+            user_id: state.user.id, book_key: book.key, title: book.title,
+            author: book.author || '', cover_url: book.coverUrl || '', year: book.year || '', started_at: startedAt,
+          }, { onConflict: 'user_id,book_key' }));
+      if (!await saveMutation(request)) return false;
+    }
+    if (removing) delete state.currentlyReading[book.key];
+    else state.currentlyReading[book.key] = {
+      key: book.key, title: book.title, author: book.author || '',
+      coverUrl: book.coverUrl || '', year: book.year || '', startedAt,
+    };
+    saveLocalGuestData();
+    if (!silent) showToast(removing ? `Stopped reading "${book.title}"` : `Now reading "${book.title}"`);
+    if (state.currentPage === 'profile') renderCurrentlyReading();
     return true;
   });
 }
